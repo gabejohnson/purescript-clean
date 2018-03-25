@@ -1,78 +1,29 @@
 module Clean
-  ( Scheme
-  , Type
-  , TypeInferenceEnv
-  , TypeInferenceState
-  , runTypeInference
+  ( runTypeInference
   , typeInference
   ) where
 
 import Prelude
 
+import Clean.Expressions (Exp(..), Lit(..))
+import Clean.Types (Scheme(..), Subst, Type(..), TypeEnv(..), TypeInference, TypeInferenceEnv(..), TypeInferenceState(..), applySubst, getFreeTypeVars)
 import Control.Monad.Eff (Eff)
-import Control.Monad.Except.Trans (ExceptT, runExceptT, throwError)
-import Control.Monad.Reader.Trans (ReaderT, runReaderT)
-import Control.Monad.State.Trans (StateT, get, put, runStateT)
-import Data.Array (fromFoldable, zip)
+import Control.Monad.Except.Trans (runExceptT, throwError)
+import Control.Monad.Reader.Trans (runReaderT)
+import Control.Monad.State.Trans (get, put, runStateT)
+import Data.Array (zip)
 import Data.Either (Either)
-import Data.Foldable (foldr)
 import Data.Map as Map
-import Data.Maybe (Maybe(..), fromMaybe)
+import Data.Maybe (Maybe(..))
 import Data.Set as Set
 import Data.Traversable (traverse)
 import Data.Tuple (Tuple(..))
-
-import Clean.Expressions (Exp(..), Lit(..))
-
-class Types a where
-  getFreeTypeVars :: a -> Set.Set String
-  applySubst :: Subst -> a -> a
-
-instance typesArray :: Types a => Types (Array a) where
-  getFreeTypeVars l = foldr Set.union Set.empty (map getFreeTypeVars l)
-  applySubst s = map (applySubst s)
-
--- Types
-data Type = TVar String
-          | TNumber
-          | TBoolean
-          | TString
-          | TFun Type Type
-derive instance eqType :: Eq Type
-derive instance ordType :: Ord Type
-
-instance typesType :: Types Type where
-  getFreeTypeVars = case _ of
-    TVar n     -> Set.singleton n
-    TFun t1 t2 -> getFreeTypeVars t1 `Set.union` getFreeTypeVars t2
-    _          -> Set.empty
-
-  applySubst s = case _ of
-    TVar n     -> fromMaybe (TVar n) $ Map.lookup n s
-    TFun t1 t2 -> TFun (applySubst s t1) (applySubst s t2)
-    t          -> t
-
--- Type schemes (type constructors?)
-data Scheme = Scheme (Array String) Type
-
-instance typesScheme :: Types Scheme where
-  getFreeTypeVars (Scheme vars t) = getFreeTypeVars t `Set.difference` Set.fromFoldable vars
-  applySubst s (Scheme vars t) = Scheme vars $ applySubst (foldr Map.delete s vars) t
-
--- Type substitutions
-type Subst = Map.Map String Type
 
 nullSubst :: Subst
 nullSubst = Map.empty
 
 composeSubst :: Subst -> Subst -> Subst
 composeSubst s1 s2 = map (applySubst s1) s2 `Map.union` s1
-
-newtype TypeEnv = TypeEnv (Map.Map String Scheme)
-
-instance typesTypeEnv :: Types TypeEnv where
-  getFreeTypeVars (TypeEnv env) = getFreeTypeVars $ fromFoldable (Map.values env)
-  applySubst s (TypeEnv env) = TypeEnv $ map (applySubst s) env
 
 remove :: TypeEnv -> String -> TypeEnv
 remove (TypeEnv env) var = TypeEnv (Map.delete var env)
@@ -81,15 +32,6 @@ generalize :: TypeEnv -> Type -> Scheme
 generalize env t = Scheme vars t
   where
     vars = Set.toUnfoldable $ getFreeTypeVars t `Set.difference` getFreeTypeVars env
-
-data TypeInferenceEnv = TypeInferenceEnv
-data TypeInferenceState = TypeInferenceState { supply :: Int
-                                             , subst :: Subst
-                                             }
-
-type TypeInference a
-  = forall e
-  . ExceptT String (ReaderT TypeInferenceEnv (StateT TypeInferenceState (Eff (| e)))) a
 
 runTypeInference
   :: forall a e
@@ -177,23 +119,3 @@ typeInference :: Map.Map String Scheme -> Exp -> TypeInference Type
 typeInference env e = do
   Tuple s t <- typeInfer (TypeEnv env) e
   pure $ applySubst s t
-
-instance showType :: Show Type where
-  show = case _ of
-    TVar n   -> n
-    TNumber  -> "Number"
-    TBoolean -> "Boolean"
-    TString  -> "String"
-    TFun t s -> showParenType t <> " -> " <> show s
-
-showParenType :: Type -> String
-showParenType t = case t of
-  TFun _ _ -> "(" <> show t <> ")"
-  _        -> show t
-
-instance showScheme :: Show Scheme where
-  show (Scheme vars t) =
-    "All "
-    <> (show $ ((_ <> ", ") <<< show) <$> vars)
-    <> "."
-    <> show t
