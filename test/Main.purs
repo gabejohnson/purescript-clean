@@ -3,7 +3,7 @@ module Test.Main where
 import Prelude
 
 import Babylon.Types as B
-import Clean (runTypeInference, typeInference)
+import Clean (defaultEnv, runTypeInference, typeInference)
 import Clean.Expressions (Exp(..), Lit(..), babylonToClean)
 import Control.Comonad (extract)
 import Control.Monad.Eff (Eff)
@@ -55,7 +55,7 @@ logResults e r = do
 
 test :: forall e. Exp -> Eff (console :: CONSOLE | e) Unit
 test e = do
-  Tuple r _ <- runTypeInference (typeInference Map.empty e)
+  Tuple r _ <- runTypeInference (typeInference defaultEnv e)
   logResults e r
 
 main :: forall e. Eff (console :: CONSOLE | e) Unit
@@ -64,7 +64,7 @@ main = do
   traverse_ test [e0, e1, e2, e3, e4, e5]
 
   -- Test JS
-  let res = extract $ runExceptT $ jsToClean "(x => x)('hello types!')"
+  let res = extract $ runExceptT $ jsToClean "a => b => { let c = 1; let d = a + b + c; return d}"
   case res of
     Left err -> log $ "JS error: " <> err
     Right exp -> test exp

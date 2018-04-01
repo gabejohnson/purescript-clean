@@ -1,5 +1,6 @@
 module Clean
-  ( runTypeInference
+  ( defaultEnv
+  , runTypeInference
   , typeInference
   ) where
 
@@ -18,6 +19,7 @@ import Data.Maybe (Maybe(..))
 import Data.Set as Set
 import Data.Traversable (traverse)
 import Data.Tuple (Tuple(..))
+import Data.Tuple.Nested ((/\))
 
 nullSubst :: Subst
 nullSubst = Map.empty
@@ -119,3 +121,25 @@ typeInference :: Map.Map String Scheme -> Exp -> TypeInference Type
 typeInference env e = do
   Tuple s t <- typeInfer (TypeEnv env) e
   pure $ applySubst s t
+
+defaultEnv :: Map.Map String Scheme
+defaultEnv =
+  Map.fromFoldable [ "(+)"   /\ (Scheme [] $ TFun TNumber (TFun TNumber TNumber))
+                   , "(-)"   /\ (Scheme [] $ TFun TNumber (TFun TNumber TNumber))
+                   , "(*)"   /\ (Scheme [] $ TFun TNumber (TFun TNumber TNumber))
+                   , "(/)"   /\ (Scheme [] $ TFun TNumber (TFun TNumber TNumber))
+                   , "(%)"   /\ (Scheme [] $ TFun TNumber (TFun TNumber TNumber))
+                   , "(**)"  /\ (Scheme [] $ TFun TNumber (TFun TNumber TNumber))
+                   , "(<<)"  /\ (Scheme [] $ TFun TNumber (TFun TNumber TNumber))
+                   , "(>>)"  /\ (Scheme [] $ TFun TNumber (TFun TNumber TNumber))
+                   , "(>>>)" /\ (Scheme [] $ TFun TNumber (TFun TNumber TNumber))
+                   , "(|)"   /\ (Scheme [] $ TFun TNumber (TFun TNumber TNumber))
+                   , "(^)"   /\ (Scheme [] $ TFun TNumber (TFun TNumber TNumber))
+                   , "(&)"   /\ (Scheme [] $ TFun TNumber (TFun TNumber TNumber))
+                   , "(<)"   /\ (Scheme [] $ TFun TNumber (TFun TNumber TBoolean))
+                   , "(<=)"  /\ (Scheme [] $ TFun TNumber (TFun TNumber TBoolean))
+                   , "(>=)"  /\ (Scheme [] $ TFun TNumber (TFun TNumber TBoolean))
+                   , "(>)"   /\ (Scheme [] $ TFun TNumber (TFun TNumber TBoolean))
+                   , "(==)"  /\ (Scheme ["a"] $ TFun (TVar "a") (TFun (TVar "a") TBoolean))
+                   , "(!=)"  /\ (Scheme ["a"] $ TFun (TVar "a") (TFun (TVar "a") TBoolean))
+                   ]
