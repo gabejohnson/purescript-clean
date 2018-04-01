@@ -39,7 +39,9 @@ instance typesType :: Types Type where
     TFun t1 t2 -> TFun (applySubst s t1) (applySubst s t2)
     t          -> t
 
--- Type schemes (type constructors?)
+-- Type schemes
+--   type variables: forall a b
+--   type: a -> b -> SomeType)
 data Scheme = Scheme (Array String) Type
 
 instance typesScheme :: Types Scheme where

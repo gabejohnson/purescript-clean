@@ -1,12 +1,12 @@
 module Clean.Expressions (Exp(..), Lit(..), babylonToClean) where
 
-import Babylon.Types (Node(..))
+import Babylon.Types (BinaryExpression', BinaryOperator(..), Node(..), VariableKind(Let))
 import Control.Monad.Except (Except, throwError)
-import Data.Array (length)
-import Data.Array.Partial (head)
+import Data.Array (length, unsnoc)
+import Data.Foldable (foldr)
 import Data.Maybe (Maybe(..))
-import Partial.Unsafe (unsafePartial)
-import Prelude (class Eq, class Ord, class Show, bind, otherwise, pure, show, ($), (<$>), (<*>), (<>), (==))
+import Data.Traversable (sequence, traverse)
+import Prelude (class Eq, class Ord, class Show, bind, join, pure, show, ($), (<$>), (<*>), (<>))
 
 -- Expressions
 data Exp = EVar String
@@ -51,69 +51,99 @@ instance showLit :: Show Lit where
 type Expression = Except String Exp
 
 babylonToClean :: Node -> Expression
-babylonToClean n = case n of
-  Identifier              _ -> identifierToEVar n
-  NumericLiteral          _ -> literalToELit n
-  BooleanLiteral          _ -> literalToELit n
-  StringLiteral           _ -> literalToELit n
-  CallExpression          _ -> callToEApp n
-  ArrowFunctionExpression _ -> arrowToEAbs n
-  VariableDeclaration     _ -> variableDeclarationToELet n
-  _                         -> throwError $ "Unsupported expression type " <> show n
+babylonToClean = case _ of
+  Identifier              e -> identifierToEVar e
+  NumericLiteral          e -> literalToELit LNumber e
+  BooleanLiteral          e -> literalToELit LBoolean e
+  StringLiteral           e -> literalToELit LString e
+  CallExpression          e -> callToEApp e
+  ArrowFunctionExpression e -> arrowToEAbs e
+  BinaryExpression        e -> binaryExpressionToEApp e
+  n                         -> throwError $ "Unsupported expression type " <> show n
 
-identifierToEVar :: Node -> Expression
-identifierToEVar = case _ of
-  Identifier { loc, name } -> pure $ EVar name
-  n                        -> throwError $ "Not an identifier " <> show n
+binaryExpressionToEApp :: BinaryExpression' ( operator :: BinaryOperator ) -> Expression
+binaryExpressionToEApp { left, right, operator } = do
+  left' <- babylonToClean left
+  right' <- babylonToClean right
+  (\op -> EApp (EApp op left') right') <$> binopToEVar operator
+    where
+      unsupportedMessage = "Unsupported binary operator " <> show operator
+      binopToEVar op = case op of
+        Equals       -> throwError unsupportedMessage
+        NotEquals    -> throwError unsupportedMessage
+        In           -> throwError unsupportedMessage
+        Instanceof   -> throwError unsupportedMessage
+        Pipe         -> throwError unsupportedMessage
+        Identical    -> pure $ EVar "(==)"
+        NotIdentical -> pure $ EVar "(!=)"
+        _            -> pure $ EVar $ "(" <> show op <> ")"
 
-literalToELit :: Node -> Expression
-literalToELit =
-  case _ of
-    NumericLiteral l -> pure $ ELit $ LNumber l.value
-    BooleanLiteral l -> pure $ ELit $ LBoolean l.value
-    StringLiteral  l -> pure $ ELit $ LString l.value
-    n                -> throwError $ "Unsupported literal " <> show n
+identifierToEVar :: forall r. { name :: String | r }-> Expression
+identifierToEVar { name } = pure $ EVar name
 
-callToEApp :: Node -> Expression
-callToEApp = case _ of
-  CallExpression c@{ arguments, callee }
-    | length arguments == 1 -> do
-      let arg = unsafePartial head arguments
-      let arg' = babylonToClean arg
-      let callee' = babylonToClean callee
-      EApp <$> callee' <*> arg'
-    | otherwise             -> throwError $ "Too many arguments " <> show arguments
-  n                         -> throwError $ "Not a call expression " <> show n
+literalToELit :: forall a r. (a -> Lit) -> { value :: a | r } -> Expression
+literalToELit ctor { value } = pure $ ELit $ ctor value
 
-arrowToEAbs :: Node -> Expression
-arrowToEAbs = case _ of
-  ArrowFunctionExpression f@{ params, body }
-    | length params == 1 -> do
-      let param = unsafePartial head params
-      EAbs <$> getIdentifierName param <*> babylonToClean body
-    | otherwise             -> throwError $ "Too many parameters " <> show params
-  n                         -> throwError $ "Unsupported function type " <> show n
+callToEApp :: forall r. { arguments :: Array Node, callee :: Node | r } -> Expression
+callToEApp { arguments, callee } = case arguments of
+  [arg] -> do
+    let arg'    = babylonToClean arg
+    let callee' = babylonToClean callee
+    EApp <$> callee' <*> arg'
+  _     -> throwError $
+           "Wrong number of arguments ("
+           <> show (length arguments) <> ") in "
+           <> show arguments
 
-getIdentifierName :: Node -> Except String String
-getIdentifierName = case _ of
-  Identifier {name} -> pure name
-  n            -> throwError $ "Not an identifier " <> show n
+arrowToEAbs :: forall r. { params :: Array Node, body :: Node | r } -> Expression
+arrowToEAbs { params, body } = case params of
+  [Identifier { name }] -> EAbs name <$> functionBodyToExp body
+  _ -> throwError $
+       "Wrong number of parameters ("
+       <> show (length params) <> ") in "
+       <> show params
 
-variableDeclarationToELet :: Node -> Expression
--- TODO: Need to deal w/ different kinds of variables (let, var, const)
-variableDeclarationToELet n = case n of
-  VariableDeclaration d@{ declarations, kind }
-    | length declarations == 1 -> do
-      let decl = unsafePartial $ head declarations
-      getDeclarator decl
-    | otherwise                -> throwError $ "Too many declarators " <> show n
-  _                            -> throwError $ "Not a variable" <> show n
+functionBodyToExp :: Node -> Expression
+functionBodyToExp = case _ of
+  BlockStatement body -> blockStatementToELet body
+  n                   -> babylonToClean n
+    where
+      blockStatementToELet { body } = case unsnoc body of
+        Just { init: decls
+             , last: (ReturnStatement { argument })
+             }  -> bodyToELet decls argument
+        Nothing -> throwError $ "Empty block statements not allowed."
+        _       -> throwError $ "Improper block statement " <> show body
 
-getDeclarator :: Node -> Expression
-getDeclarator n = case n of
-  VariableDeclarator d@{ id: id', init } -> do
-    id'' <-  getIdentifierName id'
-    case init of
-      Just i -> (ELet id'') <$> (babylonToClean i) <*> pure (EVar id'')
-      Nothing -> throwError $ "Missing declaration initializer " <> show n
-  _ -> throwError $ "Not a variable declarator " <> show n
+bodyToELet :: Array Node -> Maybe Node -> Expression
+bodyToELet decls ret = do
+  decls' <- variableDeclarationsToDeclarators decls
+  foldr reducer (returnToELet ret) decls' where
+    returnToELet = case _ of
+      Just arg -> babylonToClean arg
+      Nothing  -> throwError "Functions must return values."
+
+    reducer { id, init } acc = case init of
+      Nothing    -> throwError "`let` declarations must be initialized"
+      Just init' -> ELet id <$> babylonToClean init' <*> acc
+
+    variableDeclarationsToDeclarators ns = join <$> (traverse go ns) where
+      fromDeclarator = case _ of
+        VariableDeclarator { id: (Identifier { name })
+                           , init
+                           } -> pure { id: name, init }
+        _                    -> throwError $ "Impossible state!"
+
+      go = case _ of
+        VariableDeclaration { kind: Let
+                            , declarations
+                            }        -> sequence $ fromDeclarator <$> declarations
+        VariableDeclaration { kind } -> throwError $
+                                        "Invalid declaration type "
+                                        <> show kind
+                                        <> ". Only `let` declarations are allowed"
+
+        d                            -> throwError $
+                                        "Invalid statement "
+                                        <> show d
+                                        <> ". Only `let` and `return` statements are allowed."
