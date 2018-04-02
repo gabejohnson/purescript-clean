@@ -63,7 +63,8 @@ main = do
   traverse_ test [e0, e1, e2, e3, e4, e5]
 
   -- Test JS
-  let res = extract $ runExceptT $ jsToClean "a => b => { let c = 1; let d = a + b + c; return d}"
+  let res = extract $ runExceptT $ jsToClean """a => b => c => c ? b : typeof a + b
+   """
   case res of
     Left err -> log $ "JS error: " <> err
     Right exp -> test exp

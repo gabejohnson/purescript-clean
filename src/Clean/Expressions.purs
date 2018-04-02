@@ -1,6 +1,6 @@
 module Clean.Expressions (Exp(..), Lit(..), babylonToClean) where
 
-import Babylon.Types (BinaryExpression', BinaryOperator(..), Node(..), VariableKind(Let))
+import Babylon.Types (BinaryExpression', BinaryOperator(..), Node(..), Node', UnaryOperator(..), VariableKind(Let))
 import Control.Monad.Except (Except, throwError)
 import Data.Array (length, unsnoc)
 import Data.Foldable (foldr)
@@ -58,8 +58,34 @@ babylonToClean = case _ of
   StringLiteral           e -> literalToELit LString e
   CallExpression          e -> callToEApp e
   ArrowFunctionExpression e -> arrowToEAbs e
+  UnaryExpression         e -> unaryExpressionToEApp e
   BinaryExpression        e -> binaryExpressionToEApp e
+  ConditionalExpression   e -> conditionalToEApp e
   n                         -> throwError $ "Unsupported expression type " <> show n
+
+unaryExpressionToEApp ::
+  Node' ( operator :: UnaryOperator
+        , argument :: Node
+        , prefix :: Boolean
+        ) -> Expression
+unaryExpressionToEApp { operator, argument, prefix } =
+  EApp <$> identifier <*> babylonToClean argument
+  where
+    identifier = EVar <$> case operator of
+      Throw  -> throwError $ "Unsupported unary operator " <> show operator
+      Delete -> throwError $ "Unsupported unary operator " <> show operator
+      Void   -> throwError $ "Unsupported unary operator " <> show operator
+      Minus  -> pure $ "minus"
+      Plus   -> pure $ "plus"
+      Typeof -> pure $ "typeof"
+      _      -> pure $ "(" <> show operator <> ")"
+
+conditionalToEApp :: Node' ( test :: Node, consequent :: Node, alternate :: Node ) -> Expression
+conditionalToEApp { test, consequent, alternate } = do
+  test' <- babylonToClean test
+  consequent' <- babylonToClean consequent
+  alternate' <- babylonToClean alternate
+  pure $ EApp (EApp (EApp (EVar "(:?)") test') consequent') alternate'
 
 binaryExpressionToEApp :: BinaryExpression' ( operator :: BinaryOperator ) -> Expression
 binaryExpressionToEApp { left, right, operator } = do
