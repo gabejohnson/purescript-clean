@@ -12,7 +12,6 @@ import Control.Monad.Except (Except, runExceptT, withExceptT)
 import Data.Either (Either(..))
 import Data.Foldable (foldr)
 import Data.Foreign (F)
-import Data.Map as Map
 import Data.Traversable (traverse_)
 import Data.Tuple (Tuple(..))
 
@@ -41,7 +40,7 @@ e5 = EAbs "m" (ELet "y" (EVar "m")
                (ELet "x" (EApp (EVar "y") (ELit (LBoolean true)))
                 (EVar "x")))
 
-jsToClean :: forall e. String -> Except String Exp
+jsToClean :: String -> Except String Exp
 jsToClean js = do
   ast <- relaxF $ B.parseExpression' js
   babylonToClean ast

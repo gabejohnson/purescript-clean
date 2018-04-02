@@ -74,8 +74,6 @@ binaryExpressionToEApp { left, right, operator } = do
         In           -> throwError unsupportedMessage
         Instanceof   -> throwError unsupportedMessage
         Pipe         -> throwError unsupportedMessage
-        Identical    -> pure $ EVar "(==)"
-        NotIdentical -> pure $ EVar "(!=)"
         _            -> pure $ EVar $ "(" <> show op <> ")"
 
 identifierToEVar :: forall r. { name :: String | r }-> Expression
@@ -86,10 +84,7 @@ literalToELit ctor { value } = pure $ ELit $ ctor value
 
 callToEApp :: forall r. { arguments :: Array Node, callee :: Node | r } -> Expression
 callToEApp { arguments, callee } = case arguments of
-  [arg] -> do
-    let arg'    = babylonToClean arg
-    let callee' = babylonToClean callee
-    EApp <$> callee' <*> arg'
+  [arg] -> EApp <$> babylonToClean arg <*> babylonToClean callee
   _     -> throwError $
            "Wrong number of arguments ("
            <> show (length arguments) <> ") in "

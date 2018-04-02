@@ -18,7 +18,7 @@ import Data.Map as Map
 import Data.Maybe (Maybe(..))
 import Data.Set as Set
 import Data.Traversable (traverse)
-import Data.Tuple (Tuple(..))
+import Data.Tuple (Tuple)
 import Data.Tuple.Nested ((/\))
 
 nullSubst :: Subst
@@ -71,55 +71,49 @@ unifyTypes t1 t2 = case t1, t2 of
   TNumber, TNumber     -> pure nullSubst
   TBoolean, TBoolean   -> pure nullSubst
   TString, TString     -> pure nullSubst
-  _, _                 -> throwError $ "types do not unify: " <> show t1 <> "vs. " <> show t2
+  _, _                 -> throwError $ "types do not unify: " <> show t1 <> " vs. " <> show t2
 
 varBind :: String -> Type -> TypeInference Subst
 varBind u t | t == TVar u = pure nullSubst
             | u `Set.member` getFreeTypeVars t = throwError $ "occur check fails: " <> u <> " vs. " <> show t
             | otherwise = pure $ Map.singleton u t
 
-typeInferLit :: TypeEnv -> Lit -> TypeInference (Tuple Subst Type)
-typeInferLit _ l = pure $ Tuple nullSubst $ case l of
-  LNumber _  -> TNumber
-  LBoolean _ -> TBoolean
-  LString _  -> TString
-
 typeInfer :: TypeEnv -> Exp -> TypeInference (Tuple Subst Type)
-typeInfer (TypeEnv env) (EVar n) = case Map.lookup n env of
-  Nothing    -> throwError $ "unbound variable: " <> n
-  Just sigma -> do
-    t <- instantiate sigma
-    pure $ Tuple nullSubst t
+typeInfer env@(TypeEnv te) exp = case exp of
+  EVar n       -> case Map.lookup n te of
+    Nothing    -> throwError $ "unbound variable: `" <> n <> "`"
+    Just sigma -> (nullSubst /\ _) <$> instantiate sigma
 
-typeInfer env exp                = case exp of
-  ELit l       -> typeInferLit env l
+  ELit l       ->  pure $ nullSubst /\ case l of
+    LNumber _  -> TNumber
+    LBoolean _ -> TBoolean
+    LString _  -> TString
 
   EAbs n e     -> do
     tv <- newTyVar "a"
     let TypeEnv env' = remove env n
         env'' = TypeEnv $ env' `Map.union` Map.singleton n (Scheme [] tv)
-    Tuple s1 t1 <- typeInfer env'' e
-    pure $ Tuple s1 $ TFun (applySubst s1 tv) t1
+    s1 /\ t1 <- typeInfer env'' e
+    pure $ s1 /\ TFun (applySubst s1 tv) t1
 
   EApp e1 e2   -> do
     tv <- newTyVar "a"
-    Tuple s1 t1 <- typeInfer env e1
-    Tuple s2 t2 <- typeInfer (applySubst s1 env) e2
+    s1 /\ t1 <- typeInfer env e1
+    s2 /\ t2 <- typeInfer (applySubst s1 env) e2
     s3 <- unifyTypes (applySubst s2 t1) (TFun t2 tv)
-    pure $ Tuple (s3 `composeSubst` s2 `composeSubst` s1) (applySubst s3 tv)
+    pure $ s3 `composeSubst` s2 `composeSubst` s1 /\ applySubst s3 tv
 
   ELet x e1 e2 -> do
-    Tuple s1 t1 <- typeInfer env e1
+    s1 /\ t1 <- typeInfer env e1
     let TypeEnv env' = remove env x
         t' = generalize (applySubst s1 env) t1
         env'' = TypeEnv $ Map.insert x t' env'
-    Tuple s2 t2 <- typeInfer (applySubst s1 env'') e2
-    pure $ Tuple (s1 `composeSubst` s2) t2
-  e            -> typeInfer env e
+    s2 /\ t2 <- typeInfer (applySubst s1 env'') e2
+    pure $ s1 `composeSubst` s2 /\ t2
 
 typeInference :: Map.Map String Scheme -> Exp -> TypeInference Type
 typeInference env e = do
-  Tuple s t <- typeInfer (TypeEnv env) e
+  s /\ t <- typeInfer (TypeEnv env) e
   pure $ applySubst s t
 
 defaultEnv :: Map.Map String Scheme
