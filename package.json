@@ -1,0 +1,30 @@
+{
+  "name": "purescript-clean",
+  "version": "0.0.1",
+  "description": "Type checking a subset of JS",
+  "main": "index.js",
+  "directories": {
+    "test": "test"
+  },
+  "scripts": {
+    "test": "pulp test"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/gabejohnson/purescript-clean.git"
+  },
+  "keywords": [
+    "javascript",
+    "types",
+    "purescript"
+  ],
+  "author": "Gabe Johnson <gijohnson105@gmail.com>",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/gabejohnson/purescript-clean/issues"
+  },
+  "homepage": "https://github.com/gabejohnson/purescript-clean#readme",
+  "dependencies": {
+    "babylon": "=7.0.0-beta.43"
+  }
+}
