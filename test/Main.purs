@@ -2,6 +2,7 @@ module Test.Main where
 
 import Prelude
 
+import Babylon.Types (Node)
 import Babylon.Types as B
 import Clean (defaultEnv, runTypeInference, typeInference)
 import Clean.Expressions (Exp(..), Lit(..), babylonToClean)
@@ -40,9 +41,9 @@ e5 = EAbs "m" (ELet "y" (EVar "m")
                (ELet "x" (EApp (EVar "y") (ELit (LBoolean true)))
                 (EVar "x")))
 
-jsToClean :: String -> Except String Exp
-jsToClean js = do
-  ast <- relaxF $ B.parseExpression' js
+jsToClean :: (String -> F Node) -> String -> Except String Exp
+jsToClean parse js = do
+  ast <- relaxF $ parse js
   babylonToClean ast
 
 logResults :: forall e a. Show a => Exp -> (Either String a) -> Eff (console :: CONSOLE | e) Unit
@@ -63,11 +64,55 @@ main = do
   traverse_ test [e0, e1, e2, e3, e4, e5]
 
   -- Test JS
-  let res = extract $ runExceptT $ jsToClean """a => b => c => c ? b : typeof a + b
-   """
-  case res of
-    Left err -> log $ "JS error: " <> err
-    Right exp -> test exp
+  let exprs = [ "42"
+              , "true"
+              , "'hello'"
+              , "!false"
+              , "!42"
+              , "1 + 2"
+              , "1 + false"
+              , "true ? 1 : 0"
+              , "false ? 1 : 'zero'"
+              , "x => x"
+              , "x => y => x"
+              , "a => b => c => c ? b : typeof a + b"
+              , """
+                a => b => {
+                  let c = a + b,
+                      d = true;
+                  return d ? c : a;
+                }
+                """
+              , "(x => x) (42)"
+              , "(x => y => x) (42)"
+              , "(x => y => x) ('hello')"
+              ]
+  traverse_ (go B.parseExpression') exprs
+
+  let stmts = [ "let x = 42;"
+              , """
+                let id = x => x;
+                let y = id(42);
+                """
+              , """
+                let sub = x => y => x - y;
+                let x = sub ('string') (1);
+                """
+              ]
+  traverse_ (go B.parse') stmts
+
+  let modules = [ """
+                  export let foo = 42;
+                  """
+                , """
+                  import foo from 'foo';
+                  """
+                ]
+  traverse_ (go B.parse') modules
+  where
+    go parser s = case extract $ runExceptT $ jsToClean parser s of
+      Left err -> log $ "JS error: " <> err
+      Right exp -> test exp
 
 relaxF :: F ~> Except String
 relaxF = withExceptT $ foldr append "" <<< (show <$> _)

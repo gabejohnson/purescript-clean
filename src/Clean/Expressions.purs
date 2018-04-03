@@ -2,11 +2,11 @@ module Clean.Expressions (Exp(..), Lit(..), babylonToClean) where
 
 import Babylon.Types (BinaryExpression', BinaryOperator(..), Node(..), Node', UnaryOperator(..), VariableKind(Let))
 import Control.Monad.Except (Except, throwError)
-import Data.Array (length, unsnoc)
+import Data.Array (last, length, unsnoc)
 import Data.Foldable (foldr)
 import Data.Maybe (Maybe(..))
-import Data.Traversable (sequence, traverse)
-import Prelude (class Eq, class Ord, class Show, bind, join, pure, show, ($), (<$>), (<*>), (<>))
+import Data.Traversable (traverse)
+import Prelude (class Eq, class Ord, class Show, bind, join, otherwise, pure, show, ($), (<$>), (<*>), (<>), (==))
 
 -- Expressions
 data Exp = EVar String
@@ -52,16 +52,23 @@ type Expression = Except String Exp
 
 babylonToClean :: Node -> Expression
 babylonToClean = case _ of
-  Identifier              e -> identifierToEVar e
+  File                    f -> fileToExp f
   NumericLiteral          e -> literalToELit LNumber e
   BooleanLiteral          e -> literalToELit LBoolean e
   StringLiteral           e -> literalToELit LString e
-  CallExpression          e -> callToEApp e
-  ArrowFunctionExpression e -> arrowToEAbs e
+  Identifier              e -> identifierToEVar e
   UnaryExpression         e -> unaryExpressionToEApp e
   BinaryExpression        e -> binaryExpressionToEApp e
   ConditionalExpression   e -> conditionalToEApp e
+  ArrowFunctionExpression e -> arrowToEAbs e
+  CallExpression          e -> callToEApp e
+  -- VariableDeclaration     e -> variableDeclarationToELet e
   n                         -> throwError $ "Unsupported expression type " <> show n
+
+fileToExp :: Node' ( program :: Node ) -> Expression
+fileToExp { program } = case program of
+  Program { body } -> programBodyToELet body
+  _                -> throwError "Files must contain programs"
 
 unaryExpressionToEApp ::
   Node' ( operator :: UnaryOperator
@@ -110,7 +117,7 @@ literalToELit ctor { value } = pure $ ELit $ ctor value
 
 callToEApp :: forall r. { arguments :: Array Node, callee :: Node | r } -> Expression
 callToEApp { arguments, callee } = case arguments of
-  [arg] -> EApp <$> babylonToClean arg <*> babylonToClean callee
+  [arg] -> EApp <$> babylonToClean callee <*> babylonToClean arg
   _     -> throwError $
            "Wrong number of arguments ("
            <> show (length arguments) <> ") in "
@@ -139,32 +146,59 @@ functionBodyToExp = case _ of
 bodyToELet :: Array Node -> Maybe Node -> Expression
 bodyToELet decls ret = do
   decls' <- variableDeclarationsToDeclarators decls
-  foldr reducer (returnToELet ret) decls' where
+  foldr letDeclaratorReducer (returnToELet ret) decls' where
     returnToELet = case _ of
       Just arg -> babylonToClean arg
       Nothing  -> throwError "Functions must return values."
 
-    reducer { id, init } acc = case init of
-      Nothing    -> throwError "`let` declarations must be initialized"
-      Just init' -> ELet id <$> babylonToClean init' <*> acc
 
-    variableDeclarationsToDeclarators ns = join <$> (traverse go ns) where
-      fromDeclarator = case _ of
-        VariableDeclarator { id: (Identifier { name })
-                           , init
-                           } -> pure { id: name, init }
-        _                    -> throwError $ "Impossible state!"
+type DeclaratorRecord = { id :: String, init :: Maybe Node }
 
-      go = case _ of
-        VariableDeclaration { kind: Let
-                            , declarations
-                            }        -> sequence $ fromDeclarator <$> declarations
-        VariableDeclaration { kind } -> throwError $
-                                        "Invalid declaration type "
-                                        <> show kind
-                                        <> ". Only `let` declarations are allowed"
+programBodyToELet :: Array Node -> Expression
+programBodyToELet declarations = case declarations of
+  [] -> throwError "Programs must contains declarations"
+  _  -> do
+    decls <- variableDeclarationsToDeclarators declarations
+    let d = case last decls of
+          Nothing -> throwError $ "Impossible state!"
+          Just { id } -> pure $ EVar id
+    foldr letDeclaratorReducer d decls
 
-        d                            -> throwError $
-                                        "Invalid statement "
-                                        <> show d
-                                        <> ". Only `let` and `return` statements are allowed."
+variableDeclarationsToDeclarators :: Array Node -> Except String (Array DeclaratorRecord)
+variableDeclarationsToDeclarators ns = join <$> (traverse go ns) where
+  fromDeclarator = case _ of
+    VariableDeclarator { id: (Identifier { name: id })
+                       , init
+                       } -> pure { id, init }
+
+    _                    -> throwError
+                            "A `let` declaration must bind an expression to an identifier"
+
+  exportToDeclarators { declaration, specifiers } = case specifiers of
+    [] -> case declaration of
+      Nothing -> throwError "Named exports must include a `let` declaration"
+      Just d  -> go d
+    _  -> throwError "Export specifiers are not allowed"
+
+  go = case _ of
+    VariableDeclaration { kind
+                        , declarations
+                        }
+      | kind == Let -> traverse fromDeclarator declarations
+      | otherwise   -> throwError $
+                       "Invalid declaration type "
+                       <> show kind
+                       <> ". Only `let` declarations are allowed"
+
+    ExportNamedDeclaration e -> exportToDeclarators e
+    -- ImportDeclaration      i -> pure []
+
+    d               -> throwError $
+                       "Invalid statement "
+                       <> show d
+                       <> ". Only `let` and `return` statements are allowed."
+
+letDeclaratorReducer :: DeclaratorRecord -> Expression -> Expression
+letDeclaratorReducer { id, init } acc = case init of
+  Nothing    -> throwError "`let` declarations must be initialized"
+  Just init' -> ELet id <$> babylonToClean init' <*> acc

@@ -76,7 +76,7 @@ showParenType t = case t of
 
 instance showScheme :: Show Scheme where
   show (Scheme vars t) =
-    "All "
+    "forall "
     <> (show $ ((_ <> ", ") <<< show) <$> vars)
     <> "."
     <> show t
