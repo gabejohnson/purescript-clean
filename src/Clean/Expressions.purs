@@ -191,7 +191,7 @@ variableDeclarationsToDeclarators ns = join <$> (traverse go ns) where
                        <> ". Only `let` declarations are allowed"
 
     ExportNamedDeclaration e -> exportToDeclarators e
-    -- ImportDeclaration      i -> pure []
+    ImportDeclaration      i -> pure []
 
     d               -> throwError $
                        "Invalid statement "

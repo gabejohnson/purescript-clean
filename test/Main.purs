@@ -105,7 +105,8 @@ main = do
                   export let foo = 42;
                   """
                 , """
-                  import foo from 'foo';
+                  import foo from 'foo'; // import statements get erased and there must be something in a program
+                  let bar = 42;
                   """
                 ]
   traverse_ (go B.parse') modules
