@@ -23,6 +23,64 @@ instance typesArray :: Types a => Types (Array a) where
   getFreeTypeVars = Set.unions <<< map getFreeTypeVars
   applySubst = map <<< applySubst
 
+type Label = String
+type Name = String
+
+-- Expressions
+data Exp
+  = EVar Name
+  | EPrim Prim
+  | EApp Exp Exp
+  | EAbs Name Exp
+  | ELet Name Exp Exp
+derive instance eqExp :: Eq Exp
+derive instance ordExp :: Ord Exp
+
+instance showExp :: Show Exp where
+  show = case _ of
+    EVar n        -> n
+    EPrim p       -> show p
+    ELet n b body -> "let " <> n <> " = " <> show b <> " in " <> show body
+    EApp e1 e2    -> show e1 <> " " <> showParenExp e2
+    EAbs n e      -> "\\" <> n <> " -> " <> show e
+
+showParenExp :: Exp -> String
+showParenExp t = case t of
+  ELet _ _ _ -> parenWrap $ show t
+  EApp _ _   -> parenWrap $ show t
+  EAbs _ _   -> parenWrap $ show t
+  _          -> show t
+
+parenWrap :: String -> String
+parenWrap s = "(" <> s <> ")"
+
+-- Primitives
+data Prim
+  = LNumber Number
+  | LBoolean Boolean
+  | LString String
+  | Cond
+  | RecordEmpty
+  | RecordSelect Label
+  | RecordExtend Label
+  | RecordRestrict Label
+derive instance eqPrim :: Eq Prim
+derive instance ordPrim :: Ord Prim
+
+instance showPrim :: Show Prim where
+  show = case _ of
+    LNumber  n       -> show n
+    LBoolean b       -> if b then "true" else "false"
+    LString  s       -> "\"" <> s <> "\""
+    Cond             -> "(_?_:_)"
+    RecordSelect l   -> "(_." <> l <> ")"
+    RecordExtend l   -> "{" <> l <> ":_|_}"
+    RecordRestrict l -> "(_-" <> l <> ")"
+    RecordEmpty      -> "{}"
+    VariantInject l  -> "<" <> l <> "=_>"
+    VariantEmbed l   -> "<" <> l <> "|_>"
+    VariantElim l    -> "<" <> l <> "==_?_:_>"
+
 -- Types
 data Type
   = TVar String

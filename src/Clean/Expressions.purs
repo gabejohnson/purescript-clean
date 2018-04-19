@@ -1,64 +1,14 @@
-module Clean.Expressions (Exp(..), Prim(..), babylonToClean) where
+module Clean.Expressions (babylonToClean) where
 
 import Babylon.Types (BinaryExpression', BinaryOperator(..), Node(..), Node', ObjectProperty', UnaryOperator(..), VariableKind(Let))
+import Clean.Types (Exp(..), Prim(..))
 import Control.Monad.Except (Except, throwError)
 import Data.Array (last, length, unsnoc)
 import Data.Foldable (foldl, foldr)
 import Data.Maybe (Maybe(..), maybe)
 import Data.Traversable (traverse)
-import Prelude (class Eq, class Ord, class Show, bind, join, otherwise, pure, show, ($), (<$>), (<*>), (<>), (==))
+import Prelude (bind, join, otherwise, pure, show, ($), (<$>), (<*>), (<>), (==))
 
--- Expressions
-data Exp
-  = EVar String
-  | EPrim Prim
-  | EApp Exp Exp
-  | EAbs String Exp
-  | ELet String Exp Exp
-derive instance eqExp :: Eq Exp
-derive instance ordExp :: Ord Exp
-
-instance showExp :: Show Exp where
-  show = case _ of
-    EVar name     -> name
-    EPrim p       -> show p
-    ELet x b body -> "let " <> x <> " = " <> show b <> " in " <> show body
-    EApp e1 e2    -> show e1 <> " " <> showParenExp e2
-    EAbs n e      -> "\\" <> n <> " -> " <> show e
-
-showParenExp :: Exp -> String
-showParenExp t = case t of
-  ELet _ _ _ -> parenWrap $ show t
-  EApp _ _   -> parenWrap $ show t
-  EAbs _ _   -> parenWrap $ show t
-  _          -> show t
-
-parenWrap :: String -> String
-parenWrap s = "(" <> s <> ")"
-
--- Primitives
-data Prim
-  = LNumber Number
-  | LBoolean Boolean
-  | LString String
-  | Cond
-  | RecordSelect String
-  | RecordExtend String
-  | RecordRestrict String
-  | RecordEmpty
-derive instance eqPrim :: Eq Prim
-derive instance ordPrim :: Ord Prim
-
-instance showLit :: Show Prim where
-  show = case _ of
-    LNumber  n       -> show n
-    LBoolean b       -> if b then "true" else "false"
-    LString  s       -> "\"" <> s <> "\""
-    Cond             -> "(_?_:_)"
-    RecordSelect l   -> "(_." <> l <> ")"
-    RecordExtend l   -> "{" <> l <> ":_|_}"
-    RecordRestrict l -> "(_-" <> l <> ")"
-    RecordEmpty      -> "{}"
 
 type Expression = Except String Exp
 
