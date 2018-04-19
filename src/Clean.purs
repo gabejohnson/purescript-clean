@@ -6,8 +6,8 @@ module Clean
 
 import Prelude
 
-import Clean.Expressions (Exp(..), Lit(..))
-import Clean.Types (Scheme(..), Subst, Type(..), TypeEnv(..), TypeInference, TypeInferenceEnv(..), TypeInferenceState(..), applySubst, getFreeTypeVars)
+import Clean.Expressions (Exp(..), Prim(..))
+import Clean.Types (Scheme(..), Subst, Type(..), TypeEnv(..), TypeInference, TypeInferenceEnv(..), TypeInferenceState(..), applySubst, getFreeTypeVars, toList)
 import Control.Monad.Eff (Eff)
 import Control.Monad.Except.Trans (runExceptT, throwError)
 import Control.Monad.Reader.Trans (runReaderT)
@@ -18,7 +18,7 @@ import Data.Map as Map
 import Data.Maybe (Maybe(..))
 import Data.Set as Set
 import Data.Traversable (traverse)
-import Data.Tuple (Tuple)
+import Data.Tuple (Tuple(..), snd)
 import Data.Tuple.Nested ((/\))
 
 nullSubst :: Subst
@@ -71,7 +71,36 @@ unifyTypes t1 t2 = case t1, t2 of
   TNumber, TNumber     -> pure nullSubst
   TBoolean, TBoolean   -> pure nullSubst
   TString, TString     -> pure nullSubst
+  TRecord r1, TRecord r2 -> unifyTypes r1 r2
+  TRowEmpty, TRowEmpty -> pure nullSubst
+  TRowExtend l1 f1 rt1
+  , r2@(TRowExtend _ _ _) -> do
+    { field, rowTail, theta } <- rewriteRow l1 r2
+    case snd $ toList rt1 of
+      Just tv | Map.member tv theta -> throwError "recursive row type"
+      _                           -> do
+        theta2 <- unifyTypes (applySubst theta f1) (applySubst theta field)
+        let s = theta2 `composeSubst` theta
+        theta3 <- unifyTypes (applySubst s rt1) (applySubst s rowTail)
+        pure $ theta3 `composeSubst` s
   _, _                 -> throwError $ "types do not unify: " <> show t1 <> " vs. " <> show t2
+
+rewriteRow :: String -> Type -> TypeInference { field :: Type, rowTail :: Type, theta :: Subst }
+rewriteRow newLabel = case _ of
+  TRowEmpty                 -> throwError $ "label " <> newLabel <> " cannot be inserted"
+  (TRowExtend label field rowTail)
+    | newLabel == label     -> pure { field, rowTail, theta: nullSubst } -- nothing to do
+    | TVar alpha <- rowTail -> do
+      beta <- newTyVar "r"
+      gamma <- newTyVar "a"
+      pure { field: gamma
+           , rowTail: TRowExtend label field beta
+           , theta: Map.singleton alpha $ TRowExtend newLabel gamma beta
+           }
+    | otherwise             -> do
+      row <- rewriteRow newLabel rowTail
+      pure $ row { rowTail = TRowExtend label row.field rowTail }
+  t                         -> throwError $ "Unexpected type: " <> show t
 
 varBind :: String -> Type -> TypeInference Subst
 varBind u t | t == TVar u = pure nullSubst
@@ -79,16 +108,12 @@ varBind u t | t == TVar u = pure nullSubst
             | otherwise = pure $ Map.singleton u t
 
 typeInfer :: TypeEnv -> Exp -> TypeInference (Tuple Subst Type)
-typeInfer env@(TypeEnv te) exp = case exp of
+typeInfer env@(TypeEnv te) = case _ of
   EVar n       -> case Map.lookup n te of
     Nothing    -> throwError $ "unbound variable: `" <> n <> "`"
     Just sigma -> (nullSubst /\ _) <$> instantiate sigma
 
-  ELit l       ->  pure $ nullSubst /\ case l of
-    LNumber _  -> TNumber
-    LBoolean _ -> TBoolean
-    LString _  -> TString
-
+  EPrim p       ->  (Tuple nullSubst) <$> typeInferPrim p
   EAbs n e     -> do
     tv <- newTyVar "a"
     let TypeEnv env' = remove env n
@@ -110,6 +135,33 @@ typeInfer env@(TypeEnv te) exp = case exp of
         env'' = TypeEnv $ Map.insert x t' env'
     s2 /\ t2 <- typeInfer (applySubst s1 env'') e2
     pure $ s1 `composeSubst` s2 /\ t2
+
+typeInferPrim :: Prim -> TypeInference Type
+typeInferPrim = case _ of
+    LNumber _        -> pure TNumber
+    LBoolean _       -> pure TBoolean
+    LString _        -> pure TString
+
+    Cond             -> do
+      a <- newTyVar "a"
+      pure $ TFun TBoolean (TFun a (TFun a a))
+
+    RecordEmpty      -> pure $ TRecord TRowEmpty
+
+    RecordSelect l   -> do
+      a <- newTyVar "a"
+      r <- newTyVar "r"
+      pure $ TFun (TRecord $ TRowExtend l a r) a
+
+    RecordExtend l   -> do
+      a <- newTyVar "a"
+      r <- newTyVar "r"
+      pure $ TFun a (TFun (TRecord r) (TRecord $ TRowExtend l a r))
+
+    RecordRestrict l -> do
+      a <- newTyVar "a"
+      r <- newTyVar "r"
+      pure $ TFun (TRecord $ TRowExtend l a r) (TRecord r)
 
 typeInference :: Map.Map String Scheme -> Exp -> TypeInference Type
 typeInference env e = do
@@ -141,7 +193,4 @@ defaultEnv =
                    , "(>)"    /\ (Scheme [] $ TFun TNumber (TFun TNumber TBoolean))
                    , "(===)"  /\ (Scheme ["a"] $ TFun (TVar "a") (TFun (TVar "a") TBoolean))
                    , "(!==)"  /\ (Scheme ["a"] $ TFun (TVar "a") (TFun (TVar "a") TBoolean))
-                   , "(:?)"   /\ (Scheme ["a"] $ TFun TBoolean
-                                                     (TFun (TVar "a")
-                                                           (TFun (TVar "a") (TVar "a"))))
                    ]

@@ -1,26 +1,27 @@
-module Clean.Expressions (Exp(..), Lit(..), babylonToClean) where
+module Clean.Expressions (Exp(..), Prim(..), babylonToClean) where
 
-import Babylon.Types (BinaryExpression', BinaryOperator(..), Node(..), Node', UnaryOperator(..), VariableKind(Let))
+import Babylon.Types (BinaryExpression', BinaryOperator(..), Node(..), Node', ObjectProperty', UnaryOperator(..), VariableKind(Let))
 import Control.Monad.Except (Except, throwError)
 import Data.Array (last, length, unsnoc)
-import Data.Foldable (foldr)
-import Data.Maybe (Maybe(..))
+import Data.Foldable (foldl, foldr)
+import Data.Maybe (Maybe(..), maybe)
 import Data.Traversable (traverse)
 import Prelude (class Eq, class Ord, class Show, bind, join, otherwise, pure, show, ($), (<$>), (<*>), (<>), (==))
 
 -- Expressions
-data Exp = EVar String
-         | ELit Lit
-         | EApp Exp Exp
-         | EAbs String Exp
-         | ELet String Exp Exp
+data Exp
+  = EVar String
+  | EPrim Prim
+  | EApp Exp Exp
+  | EAbs String Exp
+  | ELet String Exp Exp
 derive instance eqExp :: Eq Exp
 derive instance ordExp :: Ord Exp
 
 instance showExp :: Show Exp where
   show = case _ of
     EVar name     -> name
-    ELit lit      -> show lit
+    EPrim p       -> show p
     ELet x b body -> "let " <> x <> " = " <> show b <> " in " <> show body
     EApp e1 e2    -> show e1 <> " " <> showParenExp e2
     EAbs n e      -> "\\" <> n <> " -> " <> show e
@@ -35,35 +36,75 @@ showParenExp t = case t of
 parenWrap :: String -> String
 parenWrap s = "(" <> s <> ")"
 
--- Literals
-data Lit = LNumber Number
-         | LBoolean Boolean
-         | LString String
-derive instance eqLit :: Eq Lit
-derive instance ordLit :: Ord Lit
+-- Primitives
+data Prim
+  = LNumber Number
+  | LBoolean Boolean
+  | LString String
+  | Cond
+  | RecordSelect String
+  | RecordExtend String
+  | RecordRestrict String
+  | RecordEmpty
+derive instance eqPrim :: Eq Prim
+derive instance ordPrim :: Ord Prim
 
-instance showLit :: Show Lit where
+instance showLit :: Show Prim where
   show = case _ of
-    LNumber  n -> show n
-    LBoolean b -> if b then "true" else "false"
-    LString  s -> "\"" <> s <> "\""
+    LNumber  n       -> show n
+    LBoolean b       -> if b then "true" else "false"
+    LString  s       -> "\"" <> s <> "\""
+    Cond             -> "(_?_:_)"
+    RecordSelect l   -> "(_." <> l <> ")"
+    RecordExtend l   -> "{" <> l <> ":_|_}"
+    RecordRestrict l -> "(_-" <> l <> ")"
+    RecordEmpty      -> "{}"
 
 type Expression = Except String Exp
 
 babylonToClean :: Node -> Expression
 babylonToClean = case _ of
   File                    f -> fileToExp f
-  NumericLiteral          e -> literalToELit LNumber e
-  BooleanLiteral          e -> literalToELit LBoolean e
-  StringLiteral           e -> literalToELit LString e
+  NumericLiteral          e -> literalToEPrim LNumber e
+  BooleanLiteral          e -> literalToEPrim LBoolean e
+  StringLiteral           e -> literalToEPrim LString e
   Identifier              e -> identifierToEVar e
   UnaryExpression         e -> unaryExpressionToEApp e
   BinaryExpression        e -> binaryExpressionToEApp e
   ConditionalExpression   e -> conditionalToEApp e
   ArrowFunctionExpression e -> arrowToEAbs e
   CallExpression          e -> callToEApp e
+  ObjectExpression        e -> objectToRecord e
+  MemberExpression        e -> memberExpressionToEPrim e
   -- VariableDeclaration     e -> variableDeclarationToELet e
   n                         -> throwError $ "Unsupported expression type " <> show n
+
+memberExpressionToEPrim :: forall r. Node' ( object :: Node, property :: Node | r) -> Expression
+memberExpressionToEPrim { object, property } = do
+  r <- babylonToClean object
+  prop <- babylonToClean property
+  maybe (throwError $ "Unsupported label type: " <> show prop)
+        (\l -> pure $ EApp (EPrim (RecordSelect l)) r)
+        $ propertyToString prop
+
+objectToRecord :: Node' (properties :: Array Node) -> Expression
+objectToRecord { properties } = foldl go (pure $ EPrim RecordEmpty) properties
+  where
+    go expr n = case n of
+      ObjectProperty { key, value } -> do
+        k <- babylonToClean key
+        v <- babylonToClean value
+        expr' <- expr
+        maybe (throwError $ "Unsupported label type: " <> show expr')
+              (\l -> pure $ EApp (EApp (EPrim $ RecordExtend l) v) expr')
+          $ propertyToString k
+      _ -> throwError $ "Unsupported label type: " <> show n
+
+propertyToString :: Exp -> Maybe String
+propertyToString = case _ of
+  EPrim (LString s) -> Just s
+  EVar s            -> Just s
+  _                 -> Nothing
 
 fileToExp :: Node' ( program :: Node ) -> Expression
 fileToExp { program } = case program of
@@ -87,18 +128,23 @@ unaryExpressionToEApp { operator, argument, prefix } =
       Typeof -> pure $ "typeof"
       _      -> pure $ "(" <> show operator <> ")"
 
-conditionalToEApp :: Node' ( test :: Node, consequent :: Node, alternate :: Node ) -> Expression
+conditionalToEApp ::
+  Node' ( test :: Node
+        , consequent :: Node
+        , alternate :: Node
+        ) -> Expression
 conditionalToEApp { test, consequent, alternate } = do
   test' <- babylonToClean test
   consequent' <- babylonToClean consequent
   alternate' <- babylonToClean alternate
-  pure $ EApp (EApp (EApp (EVar "(:?)") test') consequent') alternate'
+  pure $ EApp (EApp (EApp (EPrim Cond) test') consequent') alternate'
 
 binaryExpressionToEApp :: BinaryExpression' ( operator :: BinaryOperator ) -> Expression
 binaryExpressionToEApp { left, right, operator } = do
   left' <- babylonToClean left
   right' <- babylonToClean right
-  (\op -> EApp (EApp op left') right') <$> binopToEVar operator
+  operator' <- binopToEVar operator
+  pure $ EApp (EApp operator' left') right'
     where
       unsupportedMessage = "Unsupported binary operator " <> show operator
       binopToEVar op = case op of
@@ -112,8 +158,8 @@ binaryExpressionToEApp { left, right, operator } = do
 identifierToEVar :: forall r. { name :: String | r }-> Expression
 identifierToEVar { name } = pure $ EVar name
 
-literalToELit :: forall a r. (a -> Lit) -> { value :: a | r } -> Expression
-literalToELit ctor { value } = pure $ ELit $ ctor value
+literalToEPrim :: forall a r. (a -> Prim) -> { value :: a | r } -> Expression
+literalToEPrim ctor { value } = pure $ EPrim $ ctor value
 
 callToEApp :: forall r. { arguments :: Array Node, callee :: Node | r } -> Expression
 callToEApp { arguments, callee } = case arguments of
