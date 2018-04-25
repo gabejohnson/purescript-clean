@@ -5,7 +5,8 @@ import Prelude
 import Babylon.Types (Node)
 import Babylon.Types as B
 import Clean (defaultEnv, runTypeInference, typeInference)
-import Clean.Expressions (Exp(..), Prim(..), babylonToClean)
+import Clean.Types (Exp(..), Prim(..))
+import Clean.Expressions (babylonToClean)
 import Control.Comonad (extract)
 import Control.Monad.Eff (Eff)
 import Control.Monad.Eff.Console (CONSOLE, log)

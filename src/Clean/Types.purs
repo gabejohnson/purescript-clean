@@ -10,18 +10,8 @@ import Data.List (List(..), (:))
 import Data.Map as Map
 import Data.Maybe (Maybe(..), fromMaybe, maybe)
 import Data.Set as Set
-import Data.Tuple (Tuple)
-import Data.Tuple.Nested ((/\))
 import Partial.Unsafe (unsafePartial)
 import Prelude (class Eq, class Ord, class Show, map, show, ($), (<$>), (<<<), (<>))
-
-class Types a where
-  getFreeTypeVars :: a -> Set.Set String
-  applySubst :: Subst -> a -> a
-
-instance typesArray :: Types a => Types (Array a) where
-  getFreeTypeVars = Set.unions <<< map getFreeTypeVars
-  applySubst = map <<< applySubst
 
 type Label = String
 type Name = String
@@ -77,49 +67,71 @@ instance showPrim :: Show Prim where
     RecordExtend l   -> "{" <> l <> ":_|_}"
     RecordRestrict l -> "(_-" <> l <> ")"
     RecordEmpty      -> "{}"
-    VariantInject l  -> "<" <> l <> "=_>"
-    VariantEmbed l   -> "<" <> l <> "|_>"
-    VariantElim l    -> "<" <> l <> "==_?_:_>"
 
 -- Types
 data Type
-  = TVar String
+  = TVar TyVar
   | TNumber
   | TBoolean
   | TString
   | TFun Type Type
   | TRecord Type
   | TRowEmpty
-  | TRowExtend String Type Type
+  | TRowExtend Label Type Type
 derive instance eqType :: Eq Type
 derive instance ordType :: Ord Type
 
-instance typesType :: Types Type where
-  getFreeTypeVars = case _ of
-    TVar n           -> Set.singleton n
-    TFun t1 t2       -> getFreeTypeVars t1 `Set.union` getFreeTypeVars t2
-    TRecord t        -> getFreeTypeVars t
-    TRowExtend l t r -> getFreeTypeVars r `Set.union` getFreeTypeVars t
-    _                -> Set.empty
+data TyVar = TyVar
+  { name :: Name
+  , kind :: Kind
+  , constraint :: Constraint
+  }
+derive instance eqTyVar :: Eq TyVar
+derive instance ordTyVar :: Ord TyVar
+instance showTyVar :: Show TyVar where
+  show (TyVar { name }) = name
+-- row type variables may have constraints
+data Kind = TypeKind | RowKind
+derive instance eqKind :: Eq Kind
+derive instance ordKind :: Ord Kind
 
-  applySubst s = case _ of
-    TVar n     -> fromMaybe (TVar n) $ Map.lookup n s
-    TFun t1 t2 -> TFun (applySubst s t1) (applySubst s t2)
-    TRecord t  -> TRecord (applySubst s t)
-    TRowExtend l t r -> TRowExtend l (applySubst s t) (applySubst s r)
-    t          -> t
+-- labels the associated tyvar must lack, for types of kind row
+type Constraint = Set.Set Label
 
 -- Type schemes
 --   type variables: forall a b
 --   type: a -> b -> SomeType
-data Scheme = Scheme (Array String) Type
+data Scheme = Scheme (List TyVar) Type
+
+class Types a where
+  getFreeTypeVars :: a -> Set.Set TyVar
+  applySubst :: Subst -> a -> a
+
+instance typesArray :: Types a => Types (Array a) where
+  getFreeTypeVars = Set.unions <<< map getFreeTypeVars
+  applySubst = map <<< applySubst
+
+instance typesType :: Types Type where
+  getFreeTypeVars = case _ of
+    TVar t           -> Set.singleton t
+    TFun t1 t2       -> getFreeTypeVars t1 `Set.union` getFreeTypeVars t2
+    TRecord r        -> getFreeTypeVars r
+    TRowExtend l t r -> getFreeTypeVars r `Set.union` getFreeTypeVars t
+    _                -> Set.empty
+
+  applySubst s = case _ of
+    TVar n           -> fromMaybe (TVar n) $ Map.lookup n s
+    TFun t1 t2       -> TFun (applySubst s t1) (applySubst s t2)
+    TRecord t        -> TRecord (applySubst s t)
+    TRowExtend l t r -> TRowExtend l (applySubst s t) (applySubst s r)
+    t                -> t
 
 instance typesScheme :: Types Scheme where
   getFreeTypeVars (Scheme vars t) = getFreeTypeVars t `Set.difference` Set.fromFoldable vars
   applySubst s (Scheme vars t) = Scheme vars $ applySubst (foldr Map.delete s vars) t
 
 -- Type substitutions
-type Subst = Map.Map String Type
+type Subst = Map.Map TyVar Type
 
 newtype TypeEnv = TypeEnv (Map.Map String Scheme)
 
@@ -133,17 +145,17 @@ type TypeInference a
 
 instance showType :: Show Type where
   show = unsafePartial case _ of
-    TVar n    -> n
+    TVar t    -> show t
     TNumber   -> "Number"
     TBoolean  -> "Boolean"
     TString   -> "String"
     TFun t s  -> showParenType t <> " -> " <> show s
     TRecord r -> "{ " <> showRow r <> " }"
       where
-        showRow r = (foldr (\e s -> s <> showEntry e) "" ls) <> maybe "" (showRowTail ls) mv
+        showRow r = (foldr (\e s -> s <> showEntry e) "" rows) <> maybe "" (showRowTail rows) tyVar
           where
-            ls /\ mv = toList r
-        showEntry (l /\ t) = l <> ": " <> show t <> ", "
+            { rows, tyVar } = toList r
+        showEntry { label: l, type: t } = l <> ": " <> show t <> ", "
         showRowTail = case _, _ of
           Nil, r -> show r
           _  , r -> " | " <> show r
@@ -165,9 +177,9 @@ data TypeInferenceState = TypeInferenceState { supply :: Int
                                              , subst :: Subst
                                              }
 
-toList :: Type -> Tuple (List (Tuple String Type)) (Maybe String)
+toList :: Type -> { rows :: List { label :: Label, type :: Type }, tyVar :: Maybe TyVar }
 toList = unsafePartial $ case _ of
-  TVar r -> Nil /\ Just r
-  TRowEmpty -> Nil /\ Nothing
-  TRowExtend l t r -> let ls /\ mv = toList r
-                      in ((l /\ t) : ls) /\ mv
+  TVar r           -> { rows: Nil, tyVar: Just r }
+  TRowEmpty        -> { rows: Nil, tyVar: Nothing }
+  TRowExtend l t r -> let {rows, tyVar} = toList r
+                      in { rows: ({label: l, type: t} : rows), tyVar }
