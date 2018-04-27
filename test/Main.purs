@@ -5,7 +5,8 @@ import Prelude
 import Babylon.Types (Node)
 import Babylon.Types as B
 import Clean (defaultEnv, runTypeInference, typeInference)
-import Clean.Expressions (Exp(..), Lit(..), babylonToClean)
+import Clean.Types (Exp(..), Prim(..))
+import Clean.Expressions (babylonToClean)
 import Control.Comonad (extract)
 import Control.Monad.Eff (Eff)
 import Control.Monad.Eff.Console (CONSOLE, log)
@@ -30,7 +31,7 @@ e2 = ELet "id" (EAbs "x" (ELet "y" (EVar "x") (EVar "y")))
 
 e3 :: Exp
 e3 = ELet "id" (EAbs "x" (ELet "y" (EVar "x") (EVar "y")))
-     (EApp (EApp (EVar "id") (EVar "id")) (ELit (LNumber 2.0)))
+     (EApp (EApp (EVar "id") (EVar "id")) (EPrim (LNumber 2.0)))
 
 e4 :: Exp
 e4 = ELet "id" (EAbs "x" (EApp (EVar "x") (EVar "x")))
@@ -38,7 +39,7 @@ e4 = ELet "id" (EAbs "x" (EApp (EVar "x") (EVar "x")))
 
 e5 :: Exp
 e5 = EAbs "m" (ELet "y" (EVar "m")
-               (ELet "x" (EApp (EVar "y") (ELit (LBoolean true)))
+               (ELet "x" (EApp (EVar "y") (EPrim (LBoolean true)))
                 (EVar "x")))
 
 jsToClean :: (String -> F Node) -> String -> Except String Exp
@@ -110,6 +111,29 @@ main = do
                   """
                 ]
   traverse_ (go B.parse') modules
+
+  let records = [ "let e = {};"
+                , "let r = {'a': 1};"
+                , "let r = {b: 2};"
+                , "let r = {a: 'a', b: 2};"
+                , """
+                  let r = {a: 1};
+                  let i = r.a;
+                  """
+                ]
+  traverse_ (go B.parse') records
+
+
+  let arrays = [ "let xs = [];"
+               , "let xs = []; let ys = []; let zs = [];" -- checking for fresh type variables
+               , "let xs = [1,2,3,4,5];"
+               , "let xs = [1,2,'3',4,5];"
+               , "let xs = [[1], [1]];"
+               , "let xs = [[true], [1]];"
+               , "let xs = [{foo: true, bar: 'bar'}, {foo: false, bar: 'rab'}];"
+               ]
+  traverse_ (go B.parse') arrays
+
   where
     go parser s = case extract $ runExceptT $ jsToClean parser s of
       Left err -> log $ "JS error: " <> err
