@@ -123,9 +123,16 @@ main = do
                 ]
   traverse_ (go B.parse') records
 
-  go B.parse' """
-let arr = [1,2,3,4,5];
-              """
+
+  let arrays = [ "let xs = [];"
+               , "let xs = []; let ys = []; let zs = [];" -- checking for fresh type variables
+               , "let xs = [1,2,3,4,5];"
+               , "let xs = [1,2,'3',4,5];"
+               , "let xs = [[1], [1]];"
+               , "let xs = [[true], [1]];"
+               , "let xs = [{foo: true, bar: 'bar'}, {foo: false, bar: 'rab'}];"
+               ]
+  traverse_ (go B.parse') arrays
 
   where
     go parser s = case extract $ runExceptT $ jsToClean parser s of

@@ -6,7 +6,7 @@ module Clean
 
 import Prelude
 
-import Clean.Types (Constraint, Exp(..), Kind(..), Label, Prim(..), Scheme(..), Subst, TyVar(..), Type(..), TypeEnv(..), TypeInference, TypeInferenceEnv(..), TypeInferenceState(..), applySubst, getFreeTypeVars, toList)
+import Clean.Types (Constraint, Exp(..), Kind(..), Label, Prim(..), Scheme(..), Subst, TyVar(..), Type(..), TypeEnv(..), TypeInferenceEnv(..), TypeInferenceState(..), TypeInference, applySubst, getFreeTypeVars, toList)
 import Control.Monad.Eff (Eff)
 import Control.Monad.Except.Trans (runExceptT, throwError)
 import Control.Monad.Reader.Trans (runReaderT)
@@ -51,6 +51,9 @@ runTypeInference t = do
                                                 , subst: M.empty
                                                 }
 
+freshTyVar :: TypeInference Type
+freshTyVar = newTyVar "t"
+
 newTyVar :: String -> TypeInference Type
 newTyVar = newTyVarWith TypeKind S.empty
 
@@ -85,6 +88,7 @@ unifyTypes t1 t2 = case t1, t2 of
   TNumber, TNumber        -> pure nullSubst
   TBoolean, TBoolean      -> pure nullSubst
   TString, TString        -> pure nullSubst
+  TArray u, TArray v      -> unifyTypes u v
   TRecord r1, TRecord r2  -> unifyTypes r1 r2
   TRowEmpty, TRowEmpty    -> pure nullSubst
   TRowExtend l1 f1 rt1
@@ -119,7 +123,7 @@ rewriteRow newLabel = case _ of
     | newLabel == label     -> pure { field, rowTail, subst: nullSubst } -- nothing to do
     | TVar rt <- rowTail    -> do
       r <- newTyVarWith RowKind (lacks newLabel) "r"
-      a <- newTyVar "a"
+      a <- freshTyVar
       pure { field: a
            , rowTail: TRowExtend label field r
            , subst: M.singleton rt $ TRowExtend newLabel a r
@@ -163,14 +167,14 @@ typeInfer env@(TypeEnv te) = case _ of
 
   EPrim p       ->  {subst: nullSubst, type: _} <$> typeInferPrim env p
   EAbs n e     -> do
-    tv <- newTyVar "a"
+    tv <- freshTyVar
     let TypeEnv env' = remove env n
         env'' = TypeEnv $ env' `M.union` M.singleton n (Scheme mempty tv)
     {subst: s1, type: t1 } <- typeInfer env'' e
     pure $ {subst: s1, type: TFun (applySubst s1 tv) t1}
 
   EApp e1 e2   -> do
-    tv <- newTyVar "a"
+    tv <- freshTyVar
     {subst: s1, type: t1} <- typeInfer env e1
     {subst: s2, type: t2} <- typeInfer (applySubst s1 env) e2
     s3 <- unifyTypes (applySubst s2 t1) (TFun t2 tv)
@@ -191,33 +195,33 @@ typeInferPrim env@(TypeEnv te) = case _ of
     LString _        -> pure TString
 
     LArray xs        -> do
-      ts <- traverse (map _.type <<< typeInfer env) xs
-      emptyType <- newTyVar "a"
-      TArray <$> unifyTypeSequence emptyType ts
+      emptyType <- freshTyVar
+      TArray <$> inferExpressionSequence env emptyType xs
 
     Cond             -> do
-      a <- newTyVar "a"
+      a <- freshTyVar
       pure $ TFun TBoolean (TFun a (TFun a a))
 
     RecordEmpty      -> pure $ TRecord TRowEmpty
 
     RecordSelect l   -> do
-      a <- newTyVar "a"
+      a <- freshTyVar
       r <- newTyVarWith  RowKind (lacks l) "r"
       pure $ TFun (TRecord $ TRowExtend l a r) a
 
     RecordExtend l   -> do
-      a <- newTyVar "a"
+      a <- freshTyVar
       r <- newTyVarWith RowKind (lacks l) "r"
       pure $ TFun a (TFun (TRecord r) (TRecord $ TRowExtend l a r))
 
     RecordRestrict l -> do
-      a <- newTyVar "a"
+      a <- freshTyVar
       r <- newTyVarWith RowKind (lacks l) "r"
       pure $ TFun (TRecord $ TRowExtend l a r) (TRecord r)
     where
-      unifyTypeSequence :: forall f m. Foldable f => Type -> f Type -> TypeInference Type
-      unifyTypeSequence emptyType ts = foldM (\t1 t2 -> do
+      inferExpressionSequence :: forall f m. Foldable f => TypeEnv -> Type -> f Exp -> TypeInference Type
+      inferExpressionSequence env emptyType ts = foldM (\t1 expr -> do
+          { type: t2 } <- typeInfer env expr
           _ <- unifyTypes t1 t2
           pure t2)
         emptyType ts
