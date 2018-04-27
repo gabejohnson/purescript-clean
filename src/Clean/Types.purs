@@ -49,6 +49,7 @@ data Prim
   = LNumber Number
   | LBoolean Boolean
   | LString String
+  | LArray (Array Exp)
   | Cond
   | RecordEmpty
   | RecordSelect Label
@@ -62,6 +63,7 @@ instance showPrim :: Show Prim where
     LNumber  n       -> show n
     LBoolean b       -> if b then "true" else "false"
     LString  s       -> "\"" <> s <> "\""
+    LArray   xs      -> show xs
     Cond             -> "(_?_:_)"
     RecordSelect l   -> "(_." <> l <> ")"
     RecordExtend l   -> "{" <> l <> ":_|_}"
@@ -74,6 +76,7 @@ data Type
   | TNumber
   | TBoolean
   | TString
+  | TArray Type
   | TFun Type Type
   | TRecord Type
   | TRowEmpty
@@ -149,6 +152,7 @@ instance showType :: Show Type where
     TNumber   -> "Number"
     TBoolean  -> "Boolean"
     TString   -> "String"
+    TArray t  -> "Array " <> show t
     TFun t s  -> showParenType t <> " -> " <> show s
     TRecord r -> "{ " <> showRow r <> " }"
       where

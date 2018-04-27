@@ -7,7 +7,7 @@ import Data.Array (last, length, unsnoc)
 import Data.Foldable (foldl, foldr)
 import Data.Maybe (Maybe(..), maybe)
 import Data.Traversable (traverse)
-import Prelude (bind, join, otherwise, pure, show, ($), (<$>), (<*>), (<>), (==))
+import Prelude (bind, join, otherwise, pure, show, ($), (<$>), (<*>), (<<<), (<>), (==))
 
 
 type Expression = Except String Exp
@@ -26,8 +26,12 @@ babylonToClean = case _ of
   CallExpression          e -> callToEApp e
   ObjectExpression        e -> objectToRecord e
   MemberExpression        e -> memberExpressionToEPrim e
+  ArrayExpression         e -> arrayExpressionToEPrim e
   -- VariableDeclaration     e -> variableDeclarationToELet e
   n                         -> throwError $ "Unsupported expression type " <> show n
+
+arrayExpressionToEPrim :: forall r. Node' ( elements :: Array (Maybe Node) | r) -> Expression
+arrayExpressionToEPrim { elements } = (EPrim <<< LArray) <$> traverse (maybe (throwError $ "Sparse arrays a not supported: " <> show elements) babylonToClean) elements
 
 memberExpressionToEPrim :: forall r. Node' ( object :: Node, property :: Node | r) -> Expression
 memberExpressionToEPrim { object, property } = do

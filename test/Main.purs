@@ -123,6 +123,10 @@ main = do
                 ]
   traverse_ (go B.parse') records
 
+  go B.parse' """
+let arr = [1,2,3,4,5];
+              """
+
   where
     go parser s = case extract $ runExceptT $ jsToClean parser s of
       Left err -> log $ "JS error: " <> err
