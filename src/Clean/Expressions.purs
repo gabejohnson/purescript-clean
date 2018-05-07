@@ -1,10 +1,10 @@
 module Clean.Expressions (babylonToClean) where
 
-import Babylon.Types (BinaryExpression', BinaryOperator(..), Node(..), Node', ObjectProperty', UnaryOperator(..), VariableKind(Let))
+import Babylon.Types (BinaryExpression', BinaryOperator(Pipe, Instanceof, In, NotEquals, Equals), Node(ImportDeclaration, ExportNamedDeclaration, VariableDeclaration, Identifier, VariableDeclarator, BlockStatement, ReturnStatement, Program, ObjectProperty, ArrayExpression, MemberExpression, ObjectExpression, CallExpression, ArrowFunctionExpression, ConditionalExpression, BinaryExpression, UnaryExpression, StringLiteral, BooleanLiteral, NumericLiteral, File), Node', UnaryOperator(Typeof, Plus, Minus, Void, Delete, Throw), VariableKind(Let))
 import Clean.Types (Exp(..), Prim(..))
 import Control.Monad.Except (Except, throwError)
 import Data.Array (last, length, unsnoc)
-import Data.Foldable (foldl, foldr)
+import Data.Foldable (foldr)
 import Data.Maybe (Maybe(..), maybe)
 import Data.Traversable (traverse)
 import Prelude (bind, join, otherwise, pure, show, ($), (<$>), (<*>), (<<<), (<>), (==))
@@ -42,15 +42,15 @@ memberExpressionToEPrim { object, property } = do
         $ propertyToString prop
 
 objectToRecord :: Node' (properties :: Array Node) -> Expression
-objectToRecord { properties } = foldl go (pure $ EPrim RecordEmpty) properties
+objectToRecord { properties } = foldr go (pure $ EPrim RecordEmpty) properties
   where
-    go expr n = case n of
+    go n acc = case n of
       ObjectProperty { key, value } -> do
         k <- babylonToClean key
         v <- babylonToClean value
-        expr' <- expr
-        maybe (throwError $ "Unsupported label type: " <> show expr')
-              (\l -> pure $ EApp (EApp (EPrim $ RecordExtend l) v) expr')
+        r <- acc
+        maybe (throwError $ "Unsupported label type: " <> show r)
+              (\l -> pure $ EApp (EApp (EPrim $ RecordExtend l) v) r)
           $ propertyToString k
       _ -> throwError $ "Unsupported label type: " <> show n
 
