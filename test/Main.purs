@@ -33,36 +33,70 @@ e3 :: Exp
 e3 = ELet "id" (EAbs "x" (ELet "y" (EVar "x") (EVar "y")))
      (EApp (EApp (EVar "id") (EVar "id")) (EPrim (LNumber 2.0)))
 
+-- infinite type
 e4 :: Exp
-e4 = ELet "id" (EAbs "x" (EApp (EVar "x") (EVar "x")))
-     (EVar "id")
+e4 = ELet "foo" (EAbs "f" (EApp (EVar "f") (EVar "f")))
+               (EVar "foo")
 
 e5 :: Exp
 e5 = EAbs "m" (ELet "y" (EVar "m")
                (ELet "x" (EApp (EVar "y") (EPrim (LBoolean true)))
                 (EVar "x")))
 
+b :: Exp
+b = EApp (EApp (EPrim $ RecordExtend "b") (EPrim $ LString "foo")) (EPrim RecordEmpty)
+
+a :: Exp
+a = EApp (EApp (EPrim $ RecordExtend "a") (EPrim $ LNumber 1.0)) b
+
+s :: Exp
+s = EApp (EPrim $ RecordSelect "b") a
+
+e6 :: Exp
+e6 = ELet "r1" s s
+
+e7 :: Exp
+e7 = ELet "r" (EApp (EPrim (RecordSelect "b"))
+                    (EApp (EApp (EPrim (RecordExtend "a"))
+                                (EPrim (LNumber 1.0)))
+                          (EApp (EApp (EPrim (RecordExtend "b"))
+                                      (EPrim (LNumber 2.0)))
+                                (EPrim (RecordEmpty)))))
+              (EVar "r")
+
 jsToClean :: (String -> F Node) -> String -> Except String Exp
 jsToClean parse js = do
   ast <- relaxF $ parse js
   babylonToClean ast
 
-logResults :: forall e a. Show a => Exp -> (Either String a) -> Eff (console :: CONSOLE | e) Unit
-logResults e r = do
-  case r of
-    Left err -> log $ "error: " <> err
-    Right t  -> log $ show e <> " :: " <> show t
+logResults :: forall e a. Show a => String -> Exp -> (Either String a) -> Eff (console :: CONSOLE | e) Unit
+logResults s e r = do
+  log case r of
+    Left err -> "error: " <> err <> " in:\n\t" <> s <> "\n" <> show e <> "\n"
+    Right t  -> show t <> "\n"
+
+logExpResults :: forall e a. Show a => Exp -> (Either String a) -> Eff (console :: CONSOLE | e) Unit
+logExpResults e r = do
+  log case r of
+    Left err -> "error: " <> err <> " in:\n\t" <> show e <> "\n"
+    Right t  -> show t <> "\n"
 
 
-test :: forall e. Exp -> Eff (console :: CONSOLE | e) Unit
-test e = do
+
+test :: forall e. String -> Exp -> Eff (console :: CONSOLE | e) Unit
+test s e = do
   Tuple r _ <- runTypeInference (typeInference defaultEnv e)
-  logResults e r
+  logResults s e r
+
+testExp :: forall e. Exp -> Eff (console :: CONSOLE | e) Unit
+testExp e = do
+  Tuple r _ <- runTypeInference (typeInference defaultEnv e)
+  logExpResults e r
 
 main :: forall e. Eff (console :: CONSOLE | e) Unit
 main = do
   -- Test a Clean expression
-  traverse_ test [e0, e1, e2, e3, e4, e5]
+  traverse_ testExp [e0, e1, e2, e3, e4, e5, e6, e7]
 
   -- Test JS
   let exprs = [ "42"
@@ -99,6 +133,7 @@ main = do
                 let sub = x => y => x - y;
                 let x = sub ('string') (1);
                 """
+              , "let foo = f => f(f);"
               ]
   traverse_ (go B.parse') stmts
 
@@ -130,14 +165,21 @@ main = do
                , "let xs = [1,2,'3',4,5];"
                , "let xs = [[1], [1]];"
                , "let xs = [[true], [1]];"
-               , "let xs = [{foo: true, bar: 'bar'}, {foo: false, bar: 'rab'}];"
+               , "let xs = [{a: 1, b: 2}, {a: 3, b: 4}];"
+               , "let xs = [{a: 1, b: 2}, {b: 3, a: 4}];"
+               , """
+                 let r1 = {a:1, b: 'foo', c: true};
+                 let a = r1.b;
+                 """
+               , "let b = ({a:1, b: 'foo', c: true}).b"
+               , "let f = x => x.a + x.b;"
                ]
   traverse_ (go B.parse') arrays
 
   where
     go parser s = case extract $ runExceptT $ jsToClean parser s of
       Left err -> log $ "JS error: " <> err
-      Right exp -> test exp
+      Right exp -> test s exp
 
 relaxF :: F ~> Except String
 relaxF = withExceptT $ foldr append "" <<< (show <$> _)
