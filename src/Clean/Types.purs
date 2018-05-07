@@ -28,21 +28,14 @@ derive instance ordExp :: Ord Exp
 
 instance showExp :: Show Exp where
   show = case _ of
-    EVar n        -> n
-    EPrim p       -> show p
-    ELet n b body -> "let " <> n <> " = " <> show b <> " in " <> show body
-    EApp e1 e2    -> show e1 <> " " <> showParenExp e2
-    EAbs n e      -> "\\" <> n <> " -> " <> show e
+    EVar n        -> "EVar " <> n
+    EPrim p       -> "EPrim " <> showParen p
+    ELet n b body -> "ELet " <> n <> " " <> showParen b <> " " <> showParen body
+    EApp e1 e2    -> "EApp " <> showParen e1 <> " " <> showParen e2
+    EAbs n e      -> "EAbs " <> n <> " " <> showParen e
 
-showParenExp :: Exp -> String
-showParenExp t = case t of
-  ELet _ _ _ -> parenWrap $ show t
-  EApp _ _   -> parenWrap $ show t
-  EAbs _ _   -> parenWrap $ show t
-  _          -> show t
-
-parenWrap :: String -> String
-parenWrap s = "(" <> s <> ")"
+showParen :: forall a. Show a => a -> String
+showParen x = "(" <> show x <> ")"
 
 -- Primitives
 data Prim
@@ -60,15 +53,15 @@ derive instance ordPrim :: Ord Prim
 
 instance showPrim :: Show Prim where
   show = case _ of
-    LNumber  n       -> show n
-    LBoolean b       -> if b then "true" else "false"
-    LString  s       -> "\"" <> s <> "\""
-    LArray   xs      -> show xs
-    Cond             -> "(_?_:_)"
-    RecordSelect l   -> "(_." <> l <> ")"
-    RecordExtend l   -> "{" <> l <> ":_|_}"
-    RecordRestrict l -> "(_-" <> l <> ")"
-    RecordEmpty      -> "{}"
+    LNumber  n       -> "LNumber " <> show n
+    LBoolean b       -> "LBoolean " <> show b
+    LString  s       -> "LString \"" <> s <> "\""
+    LArray   xs      -> "LArray " <> show xs
+    Cond             -> "Cond"
+    RecordSelect l   -> "RecordSelect " <> l
+    RecordExtend l   -> "RecordExtend " <> l
+    RecordRestrict l -> "RecordRestrict " <> l
+    RecordEmpty      -> "RecordEmpty"
 
 -- Types
 data Type
@@ -81,10 +74,31 @@ data Type
   | TRecord Type
   | TRowEmpty
   | TRowExtend Label Type Type
+
 derive instance eqType :: Eq Type
 derive instance ordType :: Ord Type
+instance showType :: Show Type where
+  show = unsafePartial case _ of
+    TVar t    -> show t
+    TNumber   -> "Number"
+    TBoolean  -> "Boolean"
+    TString   -> "String"
+    TArray t  -> "Array " <> show t
+    TFun t s  -> showParenType t <> " -> " <> show s
+    TRowEmpty -> "{}"
+    TRecord r -> "{ " <> showRow r <> " }"
+    TRowExtend l t r -> "( " <> show l <> " :: " <> show t <> " | " <> show r <> " )"
+      where
+        showRow r = (foldr (\e s -> s <> showEntry e) "" rows) <> maybe "" (showRowTail rows) tyVar
+          where
+            { rows, tyVar } = toList r
+        showEntry { label: l, type: t } = l <> ": " <> show t <> ", "
+        showRowTail = case _, _ of
+          Nil, r -> show r
+          _  , r -> " | " <> show r
 
-data TyVar = TyVar
+
+newtype TyVar = TyVar
   { name :: Name
   , kind :: Kind
   , constraint :: Constraint
@@ -93,6 +107,7 @@ derive instance eqTyVar :: Eq TyVar
 derive instance ordTyVar :: Ord TyVar
 instance showTyVar :: Show TyVar where
   show (TyVar { name }) = name
+
 -- row type variables may have constraints
 data Kind = TypeKind | RowKind
 derive instance eqKind :: Eq Kind
@@ -123,7 +138,7 @@ instance typesType :: Types Type where
     _                -> Set.empty
 
   applySubst s = case _ of
-    TVar n           -> fromMaybe (TVar n) $ Map.lookup n s
+    TVar v           -> fromMaybe (TVar v) $ Map.lookup v s
     TFun t1 t2       -> TFun (applySubst s t1) (applySubst s t2)
     TRecord t        -> TRecord (applySubst s t)
     TRowExtend l t r -> TRowExtend l (applySubst s t) (applySubst s r)
@@ -146,24 +161,6 @@ type TypeInference a
   = forall e
   . ExceptT String (ReaderT TypeInferenceEnv (StateT TypeInferenceState (Eff (| e)))) a
 
-instance showType :: Show Type where
-  show = unsafePartial case _ of
-    TVar t    -> show t
-    TNumber   -> "Number"
-    TBoolean  -> "Boolean"
-    TString   -> "String"
-    TArray t  -> "Array " <> show t
-    TFun t s  -> showParenType t <> " -> " <> show s
-    TRecord r -> "{ " <> showRow r <> " }"
-      where
-        showRow r = (foldr (\e s -> s <> showEntry e) "" rows) <> maybe "" (showRowTail rows) tyVar
-          where
-            { rows, tyVar } = toList r
-        showEntry { label: l, type: t } = l <> ": " <> show t <> ", "
-        showRowTail = case _, _ of
-          Nil, r -> show r
-          _  , r -> " | " <> show r
-
 showParenType :: Type -> String
 showParenType t = case t of
   TFun _ _ -> "(" <> show t <> ")"
@@ -183,7 +180,7 @@ data TypeInferenceState = TypeInferenceState { supply :: Int
 
 toList :: Type -> { rows :: List { label :: Label, type :: Type }, tyVar :: Maybe TyVar }
 toList = unsafePartial $ case _ of
-  TVar r           -> { rows: Nil, tyVar: Just r }
+  TVar v           -> { rows: Nil, tyVar: Just v }
   TRowEmpty        -> { rows: Nil, tyVar: Nothing }
   TRowExtend l t r -> let {rows, tyVar} = toList r
                       in { rows: ({label: l, type: t} : rows), tyVar }
