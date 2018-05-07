@@ -6,7 +6,7 @@ module Clean
 
 import Prelude
 
-import Clean.Types (Constraint, Exp(..), Kind(..), Label, Prim(..), Scheme(..), Subst, TyVar(..), Type(..), TypeEnv(..), TypeInferenceEnv(..), TypeInferenceState(..), TypeInference, applySubst, getFreeTypeVars, toList)
+import Clean.Types (Constraint, Exp(..), Kind(..), Label, Prim(..), Scheme(..), Subst, TyVar(..), Type(..), TypeEnv(..), TypeInference, TypeInferenceEnv(..), TypeInferenceState(..), applySubst, getFreeTypeVars, toList)
 import Control.Monad.Eff (Eff)
 import Control.Monad.Except.Trans (runExceptT, throwError)
 import Control.Monad.Reader.Trans (runReaderT)
@@ -91,23 +91,34 @@ unifyTypes t1 t2 = case t1, t2 of
   TArray u, TArray v      -> unifyTypes u v
   TRecord r1, TRecord r2  -> unifyTypes r1 r2
   TRowEmpty, TRowEmpty    -> pure nullSubst
-  TRowExtend l1 f1 rt1
-  , r2@(TRowExtend _ _ _) -> do
-    { field: f2, rowTail: rt2, subst: s1 } <- rewriteRow l1 r2
-    case (toList rt1).tyVar of
-      Just tv | M.member tv s1 -> throwError "recursive row type"
+
+  TRowExtend label1 fieldType1 rowTail1
+  , row2@(TRowExtend _ _ _) -> do
+
+    { fieldType: fieldType2
+    , rowTail:   rowTail2
+    , subst:     subst1
+    }                    <- rewriteRow label1 row2
+
+    case (toList rowTail1).tyVar of
+      -- ensure termination
+      Just tv | M.member tv subst1 -> throwError "recursive row type"
       _                        -> do
-        s2 <- unifyTypes (applySubst s1 f1) (applySubst s1 f2)
-        let s3 = s2 `composeSubst` s1
-        s4 <- unifyTypes (applySubst s3 rt1) (applySubst s3 rt2)
-        pure $ s4 `composeSubst` s3
-  _, _                 -> throwError $ "types do not unify: " <> show t1 <> " vs. " <> show t2
+        subst2 <- unifyTypes (applySubst subst1 fieldType1) (applySubst subst1 fieldType2)
+
+        let subst3 = subst2 `composeSubst` subst1
+
+        subst4 <- unifyTypes (applySubst subst3 rowTail1) (applySubst subst3 rowTail2)
+
+        pure $ subst4 `composeSubst` subst3
+  _, _                      -> throwError $ "types do not unify: " <> show t1 <> " vs. " <> show t2
+
 
 -- union lacks constraints when unifying row type variables
 unionConstraints :: TyVar -> TyVar -> TypeInference Subst
-unionConstraints u v
+unionConstraints u@(TyVar u') v@(TyVar v')
   | u == v    = pure nullSubst
-  | TyVar u' <- u, TyVar v' <- v =
+  | otherwise =
     case u'.kind, v'.kind of
       TypeKind, TypeKind -> pure $ M.singleton u (TVar v)
       RowKind, RowKind   -> do
@@ -116,21 +127,28 @@ unionConstraints u v
         pure $ M.fromFoldable [u /\ r, v /\ r]
       _, _               -> throwError "kind mismatch"
 
-rewriteRow :: Label -> Type -> TypeInference { field :: Type, rowTail :: Type, subst :: Subst }
+rewriteRow :: Label -> Type -> TypeInference { fieldType :: Type, rowTail :: Type, subst :: Subst }
 rewriteRow newLabel = case _ of
   TRowEmpty                 -> throwError $ "label " <> newLabel <> " cannot be inserted"
-  (TRowExtend label field rowTail)
-    | newLabel == label     -> pure { field, rowTail, subst: nullSubst } -- nothing to do
+  (TRowExtend label fieldType rowTail)
+    | newLabel == label     -> pure { fieldType, rowTail, subst: nullSubst } -- nothing to do
+
     | TVar rt <- rowTail    -> do
       r <- newTyVarWith RowKind (lacks newLabel) "r"
       a <- freshTyVar
-      pure { field: a
-           , rowTail: TRowExtend label field r
-           , subst: M.singleton rt $ TRowExtend newLabel a r
+      subst <- varBindRow rt $ TRowExtend newLabel a r
+
+      pure { fieldType: a
+           , rowTail: applySubst subst $ TRowExtend label fieldType r
+           , subst
            }
+
+
     | otherwise             -> do
       row <- rewriteRow newLabel rowTail
-      pure $ row { rowTail = TRowExtend label row.field rowTail }
+
+      pure $ row { rowTail = TRowExtend label fieldType row.rowTail }
+
   t                         -> throwError $ "Unexpected type: " <> show t
 
 varBind :: TyVar -> Type -> TypeInference Subst
@@ -147,8 +165,8 @@ varBind u@(TyVar u') t | t == TVar u = pure nullSubst
 varBindRow :: TyVar -> Type -> TypeInference Subst
 varBindRow u@(TyVar u') t = case L.fromFoldable (ls `S.intersection` ls') of
   L.Nil | Nothing <- tyVar -> pure s1
-        | Just r1@(TyVar r1') <- tyVar -> do
-          let c = ls `S.union` r1'.constraint
+        | Just r1@(TyVar {constraint}) <- tyVar -> do
+          let c = ls `S.union` constraint
           r2 <- newTyVarWith RowKind c "r"
           let s2 = M.singleton r1 r2
           pure $ s1 `composeSubst` s2
@@ -174,9 +192,9 @@ typeInfer env@(TypeEnv te) = case _ of
     pure $ {subst: s1, type: TFun (applySubst s1 tv) t1}
 
   EApp e1 e2   -> do
-    tv <- freshTyVar
     {subst: s1, type: t1} <- typeInfer env e1
     {subst: s2, type: t2} <- typeInfer (applySubst s1 env) e2
+    tv <- freshTyVar
     s3 <- unifyTypes (applySubst s2 t1) (TFun t2 tv)
     pure $ {subst: s3 `composeSubst` s2 `composeSubst` s1, type: applySubst s3 tv}
 
@@ -189,7 +207,7 @@ typeInfer env@(TypeEnv te) = case _ of
     pure $ {subst: s1 `composeSubst` s2, type: t2}
 
 typeInferPrim :: TypeEnv -> Prim -> TypeInference Type
-typeInferPrim env@(TypeEnv te) = case _ of
+typeInferPrim env = case _ of
     LNumber _        -> pure TNumber
     LBoolean _       -> pure TBoolean
     LString _        -> pure TString
@@ -206,7 +224,7 @@ typeInferPrim env@(TypeEnv te) = case _ of
 
     RecordSelect l   -> do
       a <- freshTyVar
-      r <- newTyVarWith  RowKind (lacks l) "r"
+      r <- newTyVarWith RowKind (lacks l) "r"
       pure $ TFun (TRecord $ TRowExtend l a r) a
 
     RecordExtend l   -> do
