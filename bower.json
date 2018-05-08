@@ -14,7 +14,9 @@
     "purescript-exceptions": "^3.1.0",
     "purescript-transformers": "^3.5.0",
     "purescript-generics-rep": "^5.4.0",
-    "purescript-babylon": "git@github.com:gabejohnson/purescript-babylon.git"
+    "purescript-babylon": "git@github.com:gabejohnson/purescript-babylon.git",
+    "purescript-node-process": "^5.0.0",
+    "purescript-optlicative": "^4.0.3"
   },
   "devDependencies": {
     "purescript-psci-support": "^3.0.0"
