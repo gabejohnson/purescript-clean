@@ -5,7 +5,7 @@ import Prelude
 import Babylon.Types as B
 import Clean (defaultEnv, runTypeInference, typeInference)
 import Clean.Expressions (babylonToClean)
-import Clean.Types (Exp)
+import Clean.Types (Exp, Type)
 import Control.Comonad (extract)
 import Control.Monad.Eff (Eff)
 import Control.Monad.Eff.Console (CONSOLE, log)
@@ -55,7 +55,8 @@ main = do
     (\{file}-> do
       buff <- readFile file
       src <- toString UTF8 buff
-      infer src)
+      result <- infer src
+      logResults src result)
     value
 
 jsToClean :: forall e. String -> Either String Exp
@@ -66,11 +67,13 @@ jsToClean = extract <<< runExceptT <<< go B.parse'
       ast <- relaxF $ parse js
       babylonToClean ast
 
-infer :: forall e. String -> Eff (console :: CONSOLE | e) Unit
+infer :: forall e. String -> Eff (console :: CONSOLE | e) (Either String Type)
 infer src =
   case jsToClean src of
-    Left err -> log $ "JS error: " <> err
-    Right exp -> run exp
+    Left err -> pure $ Left $ "JS error: " <> err
+    Right exp -> do
+      Tuple r _ <- runTypeInference (typeInference defaultEnv exp)
+      pure r
 
 showClean :: Either String Exp -> String
 showClean = either id show
@@ -78,16 +81,11 @@ showClean = either id show
 relaxF :: F ~> Except String
 relaxF = withExceptT $ foldr append "" <<< (show <$> _)
 
-run :: forall e. Exp -> Eff (console :: CONSOLE | e) Unit
-run e = do
-  Tuple r _ <- runTypeInference (typeInference defaultEnv e)
-  logResults e r
-
-logResults :: forall e a. Show a => Exp -> (Either String a) -> Eff (console :: CONSOLE | e) Unit
-logResults e r = do
-  case r of
-    Left err -> log $ "error: " <> err
-    Right t  -> log $ show e <> " :: " <> show t
+logResults :: forall e a. Show a => String -> (Either String a) -> Eff (console :: CONSOLE | e) Unit
+logResults src result = do
+  case result of
+    Left err -> log $ "error: " <> err <> " in\n\n" <> src
+    Right t  -> log $ src <> " :: " <> show t
 
 
 
