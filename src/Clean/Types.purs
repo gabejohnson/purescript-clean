@@ -151,7 +151,7 @@ instance typesScheme :: Types Scheme where
 -- Type substitutions
 type Subst = Map.Map TyVar Type
 
-newtype TypeEnv = TypeEnv (Map.Map String Scheme)
+newtype TypeEnv = TypeEnv (Map.Map Name Scheme)
 
 instance typesTypeEnv :: Types TypeEnv where
   getFreeTypeVars (TypeEnv env) = getFreeTypeVars $ fromFoldable (Map.values env)

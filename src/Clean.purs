@@ -186,9 +186,9 @@ typeInfer env@(TypeEnv te) = case _ of
   EPrim p       ->  {subst: nullSubst, type: _} <$> typeInferPrim env p
   EAbs n e     -> do
     tv <- freshTyVar
-    let TypeEnv env' = remove env n
-        env'' = TypeEnv $ env' `M.union` M.singleton n (Scheme mempty tv)
-    {subst: s1, type: t1 } <- typeInfer env'' e
+    let TypeEnv env2 = remove env n
+        env3 = TypeEnv $ env2 `M.union` M.singleton n (Scheme mempty tv)
+    {subst: s1, type: t1 } <- typeInfer env3 e
     pure $ {subst: s1, type: TFun (applySubst s1 tv) t1}
 
   EApp e1 e2   -> do
@@ -199,11 +199,12 @@ typeInfer env@(TypeEnv te) = case _ of
     pure $ {subst: s3 `composeSubst` s2 `composeSubst` s1, type: applySubst s3 tv}
 
   ELet x e1 e2 -> do
-    {subst: s1, type: t1 } <- typeInfer env e1
-    let TypeEnv env' = remove env x
-        t' = generalize (applySubst s1 env) t1
-        env'' = TypeEnv $ M.insert x t' env'
-    {subst: s2, type: t2} <- typeInfer (applySubst s1 env'') e2
+    {subst: s1, type: t1} <- typeInfer env e1
+    let TypeEnv env2 = remove env x
+        scheme = generalize (applySubst s1 env) t1
+        env3 = TypeEnv $ M.insert x scheme env2
+        env4 = applySubst s1 env3
+    {subst: s2, type: t2} <- typeInfer env4 e2
     pure $ {subst: s1 `composeSubst` s2, type: t2}
 
 typeInferPrim :: TypeEnv -> Prim -> TypeInference Type
@@ -245,10 +246,11 @@ typeInferPrim env = case _ of
         emptyType ts
 
 
-typeInference :: M.Map String Scheme -> Exp -> TypeInference Type
-typeInference env e = do
-  {subst: s, type: t} <- typeInfer (TypeEnv env) e
-  pure $ applySubst s t
+typeInference :: Exp -> TypeInference Type
+typeInference e = do
+  TypeInferenceState s <- get
+  {subst, type: t} <- typeInfer s.env e
+  pure $ applySubst subst t
 
 lacks :: Label -> Constraint
 lacks = S.singleton
@@ -256,29 +258,31 @@ lacks = S.singleton
 mkTyVar :: String -> TyVar
 mkTyVar name = TyVar { name, kind: TypeKind, constraint: S.empty }
 
-defaultEnv :: M.Map String Scheme
-defaultEnv =
-  M.fromFoldable [ "minus"  /\ (Scheme mempty $ TFun TNumber TNumber)
-                 , "negate" /\ (Scheme mempty $ TFun TNumber TNumber)
-                 , "(~)"    /\ (Scheme mempty $ TFun TNumber TNumber)
-                 , "(!)"    /\ (Scheme mempty $ TFun TBoolean TBoolean)
-                 , "typeof" /\ (Scheme mempty $ TFun (TVar $ mkTyVar "a") TString)
-                 , "(+)"    /\ (Scheme mempty $ TFun TNumber (TFun TNumber TNumber))
-                 , "(-)"    /\ (Scheme mempty $ TFun TNumber (TFun TNumber TNumber))
-                 , "(*)"    /\ (Scheme mempty $ TFun TNumber (TFun TNumber TNumber))
-                 , "(/)"    /\ (Scheme mempty $ TFun TNumber (TFun TNumber TNumber))
-                 , "(%)"    /\ (Scheme mempty $ TFun TNumber (TFun TNumber TNumber))
-                 , "(**)"   /\ (Scheme mempty $ TFun TNumber (TFun TNumber TNumber))
-                 , "(<<)"   /\ (Scheme mempty $ TFun TNumber (TFun TNumber TNumber))
-                 , "(>>)"   /\ (Scheme mempty $ TFun TNumber (TFun TNumber TNumber))
-                 , "(>>>)"  /\ (Scheme mempty $ TFun TNumber (TFun TNumber TNumber))
-                 , "(|)"    /\ (Scheme mempty $ TFun TNumber (TFun TNumber TNumber))
-                 , "(^)"    /\ (Scheme mempty $ TFun TNumber (TFun TNumber TNumber))
-                 , "(&)"    /\ (Scheme mempty $ TFun TNumber (TFun TNumber TNumber))
-                 , "(<)"    /\ (Scheme mempty $ TFun TNumber (TFun TNumber TBoolean))
-                 , "(<=)"   /\ (Scheme mempty $ TFun TNumber (TFun TNumber TBoolean))
-                 , "(>=)"   /\ (Scheme mempty $ TFun TNumber (TFun TNumber TBoolean))
-                 , "(>)"    /\ (Scheme mempty $ TFun TNumber (TFun TNumber TBoolean))
-                 , "(===)"  /\ (Scheme (pure $ mkTyVar "a") $ TFun (TVar $ mkTyVar "a") (TFun (TVar $ mkTyVar "a") TBoolean))
-                 , "(!==)"  /\ (Scheme (pure $ mkTyVar "a") $ TFun (TVar $ mkTyVar "a") (TFun (TVar $ mkTyVar "a") TBoolean))
-                 ]
+defaultEnv :: TypeEnv
+defaultEnv = TypeEnv $ M.fromFoldable
+             [ "minus"  /\ (Scheme mempty $ TFun TNumber TNumber)
+             , "negate" /\ (Scheme mempty $ TFun TNumber TNumber)
+             , "(~)"    /\ (Scheme mempty $ TFun TNumber TNumber)
+             , "(!)"    /\ (Scheme mempty $ TFun TBoolean TBoolean)
+             , "typeof" /\ (Scheme mempty $ TFun (TVar $ mkTyVar "a") TString)
+             , "(+)"    /\ (Scheme mempty $ TFun TNumber (TFun TNumber TNumber))
+             , "(-)"    /\ (Scheme mempty $ TFun TNumber (TFun TNumber TNumber))
+             , "(*)"    /\ (Scheme mempty $ TFun TNumber (TFun TNumber TNumber))
+             , "(/)"    /\ (Scheme mempty $ TFun TNumber (TFun TNumber TNumber))
+             , "(%)"    /\ (Scheme mempty $ TFun TNumber (TFun TNumber TNumber))
+             , "(**)"   /\ (Scheme mempty $ TFun TNumber (TFun TNumber TNumber))
+             , "(<<)"   /\ (Scheme mempty $ TFun TNumber (TFun TNumber TNumber))
+             , "(>>)"   /\ (Scheme mempty $ TFun TNumber (TFun TNumber TNumber))
+             , "(>>>)"  /\ (Scheme mempty $ TFun TNumber (TFun TNumber TNumber))
+             , "(|)"    /\ (Scheme mempty $ TFun TNumber (TFun TNumber TNumber))
+             , "(^)"    /\ (Scheme mempty $ TFun TNumber (TFun TNumber TNumber))
+             , "(&)"    /\ (Scheme mempty $ TFun TNumber (TFun TNumber TNumber))
+             , "(<)"    /\ (Scheme mempty $ TFun TNumber (TFun TNumber TBoolean))
+             , "(<=)"   /\ (Scheme mempty $ TFun TNumber (TFun TNumber TBoolean))
+             , "(>=)"   /\ (Scheme mempty $ TFun TNumber (TFun TNumber TBoolean))
+             , "(>)"    /\ (Scheme mempty $ TFun TNumber (TFun TNumber TBoolean))
+             , "(===)"  /\ (Scheme (pure $ mkTyVar "a") $
+                            TFun (TVar $ mkTyVar "a") (TFun (TVar $ mkTyVar "a") TBoolean))
+             , "(!==)"  /\ (Scheme (pure $ mkTyVar "a") $
+                            TFun (TVar $ mkTyVar "a") (TFun (TVar $ mkTyVar "a") TBoolean))
+             ]
