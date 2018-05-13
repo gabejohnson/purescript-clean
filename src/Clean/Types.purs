@@ -37,6 +37,16 @@ instance showExp :: Show Exp where
 showParen :: forall a. Show a => a -> String
 showParen x = "(" <> show x <> ")"
 
+-- Declarations
+data Declaration
+  = ImportDeclaration (List Exp) Exp
+  | ExportDeclaration Exp   -- ELet
+  | VariableDeclaration Exp -- ELet
+derive instance eqDeclaration :: Eq Declaration
+derive instance ordDeclaration :: Ord Declaration
+
+type Module = List Declaration
+
 -- Primitives
 data Prim
   = LNumber Number
@@ -176,6 +186,7 @@ instance showScheme :: Show Scheme where
 data TypeInferenceEnv = TypeInferenceEnv
 data TypeInferenceState = TypeInferenceState { supply :: Int
                                              , subst :: Subst
+                                             , env :: TypeEnv
                                              }
 
 toList :: Type -> { rows :: List { label :: Label, type :: Type }, tyVar :: Maybe TyVar }

@@ -3,9 +3,9 @@ module Main where
 import Prelude
 
 import Babylon.Types as B
-import Clean (defaultEnv, runTypeInference, typeInference)
-import Clean.Expressions (babylonToClean)
-import Clean.Types (Exp, Type)
+import Clean (runTypeInference, typeInferModule)
+import Clean.Expressions (fileToModule)
+import Clean.Types (Exp, Type, Module)
 import Control.Comonad (extract)
 import Control.Monad.Eff (Eff)
 import Control.Monad.Eff.Console (CONSOLE, log)
@@ -59,20 +59,19 @@ main = do
       logResults src result)
     value
 
-jsToClean :: forall e. String -> Either String Exp
+jsToClean :: String -> Either String Module
 jsToClean = extract <<< runExceptT <<< go B.parse'
   where
-    go :: (String -> F B.Node) -> String -> Except String Exp
     go parse js = do
       ast <- relaxF $ parse js
-      babylonToClean ast
+      fileToModule ast
 
 infer :: forall e. String -> Eff (console :: CONSOLE | e) (Either String Type)
 infer src =
   case jsToClean src of
     Left err -> pure $ Left $ "JS error: " <> err
     Right exp -> do
-      Tuple r _ <- runTypeInference (typeInference defaultEnv exp)
+      Tuple r _ <- runTypeInference (typeInferModule exp)
       pure r
 
 showClean :: Either String Exp -> String
@@ -86,6 +85,4 @@ logResults src result = do
   case result of
     Left err -> log $ "error: " <> err <> " in\n\n" <> src
     Right t  -> log $ src <> " :: " <> show t
-
-
 

@@ -2,11 +2,12 @@ module Clean
   ( defaultEnv
   , runTypeInference
   , typeInference
+  , typeInferModule
   ) where
 
 import Prelude
 
-import Clean.Types (Constraint, Exp(..), Kind(..), Label, Prim(..), Scheme(..), Subst, TyVar(..), Type(..), TypeEnv(..), TypeInference, TypeInferenceEnv(..), TypeInferenceState(..), applySubst, getFreeTypeVars, toList)
+import Clean.Types (Constraint, Declaration(..), Exp(..), Kind(..), Label, Module, Prim(..), Scheme(..), Subst, TyVar(..), Type(..), TypeEnv(..), TypeInference, TypeInferenceEnv(..), TypeInferenceState(..), applySubst, getFreeTypeVars, toList)
 import Control.Monad.Eff (Eff)
 import Control.Monad.Except.Trans (runExceptT, throwError)
 import Control.Monad.Reader.Trans (runReaderT)
@@ -14,6 +15,7 @@ import Control.Monad.State.Trans (get, put, runStateT)
 import Data.Array as A
 import Data.Either (Either)
 import Data.Foldable (class Foldable, foldM)
+import Data.List (List(..))
 import Data.List as L
 import Data.Map as M
 import Data.Maybe (Maybe(..))
@@ -49,6 +51,7 @@ runTypeInference t = do
     initTypeInferenceEnv = TypeInferenceEnv
     initTypeInferenceState = TypeInferenceState { supply: 0
                                                 , subst: M.empty
+                                                , env: defaultEnv
                                                 }
 
 freshTyVar :: TypeInference Type
@@ -245,6 +248,22 @@ typeInferPrim env = case _ of
           pure t2)
         emptyType ts
 
+typeInferModule :: Module -> TypeInference Type
+typeInferModule decls = do
+  emptyType <- freshTyVar
+  foldM go emptyType decls
+  where
+  go :: Type -> Declaration -> TypeInference Type
+  go t1 = case _ of
+    VariableDeclaration exp -> case exp of
+      ELet name _ _ -> do
+        t2 <- typeInference exp
+        let scheme = Scheme Nil t2
+        TypeInferenceState s@{ env: TypeEnv env } <- get
+        _ <- put $ TypeInferenceState s { env = TypeEnv $ M.insert name scheme env }
+        pure t2
+      _             -> throwError $ "Only let declarations are supported. Found " <> show exp
+    _                       -> throwError "Only variable declarations are supported at this time"
 
 typeInference :: Exp -> TypeInference Type
 typeInference e = do

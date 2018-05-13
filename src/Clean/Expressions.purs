@@ -1,20 +1,63 @@
-module Clean.Expressions (babylonToClean) where
+module Clean.Expressions (babylonToClean, fileToModule) where
 
-import Babylon.Types (BinaryExpression', BinaryOperator(Pipe, Instanceof, In, NotEquals, Equals), Node(ImportDeclaration, ExportNamedDeclaration, VariableDeclaration, Identifier, VariableDeclarator, BlockStatement, ReturnStatement, Program, ObjectProperty, ArrayExpression, MemberExpression, ObjectExpression, CallExpression, ArrowFunctionExpression, ConditionalExpression, BinaryExpression, UnaryExpression, StringLiteral, BooleanLiteral, NumericLiteral, File), Node', UnaryOperator(Typeof, Plus, Minus, Void, Delete, Throw), VariableKind(Let))
-import Clean.Types (Exp(..), Prim(..))
+import Babylon.Types (BinaryExpression', BinaryOperator(Pipe, Instanceof, In, NotEquals, Equals), Node(..), Node', UnaryOperator(Typeof, Plus, Minus, Void, Delete, Throw), VariableKind(Let))
+import Clean.Types (Exp(ELet, EVar, EAbs, EApp, EPrim), Prim(Cond, LString, RecordEmpty, RecordExtend, RecordSelect, LArray, LBoolean, LNumber))
+import Clean.Types as CT
 import Control.Monad.Except (Except, throwError)
 import Data.Array (last, length, unsnoc)
 import Data.Foldable (foldr)
+import Data.List as L
 import Data.Maybe (Maybe(..), maybe)
-import Data.Traversable (traverse)
+import Data.Traversable (sequence, traverse)
 import Prelude (bind, join, otherwise, pure, show, ($), (<$>), (<*>), (<<<), (<>), (==))
 
 
 type Expression = Except String Exp
 
+fileToModule :: Node -> Except String CT.Module
+fileToModule = case _ of
+  File { program: Program { body } }
+    -> case body of
+     []    -> throwError "Modules must node be empty"
+     decls -> sequence $ L.fromFoldable $ declToDecl <$> decls
+  _ -> throwError "Files must be files"
+
+declToDecl :: Node -> Except String CT.Declaration
+declToDecl = case _ of
+  ImportDeclaration imp      -> importToDeclaration imp
+  ExportNamedDeclaration exp -> exportToDeclaration exp
+  VariableDeclaration decl   -> variableToDeclaration decl
+  d                          -> throwError $ "Unsupported declaration type " <> show d
+  where
+    importToDeclaration { source, specifiers } = do
+      src <- babylonToClean source
+      specs <- traverse babylonToClean specifiers
+      pure $ CT.ImportDeclaration (L.fromFoldable specs) src
+
+    exportToDeclaration { declaration
+                        , source
+                        , specifiers
+                        } = case declaration, source, specifiers of
+      Just decl, Nothing, [] -> declToDecl decl
+      _, _, _                -> throwError $ "Unsupported export declaration"
+
+    variableToDeclaration { declarations, kind } = case kind of
+      Let -> case declarations of
+        [VariableDeclarator { id: Identifier { name }, init }]
+               -> CT.VariableDeclaration <$> (declaratorToELet name init)
+        _      -> throwError $ "Exactly ONE declarator allowed at the top-level. "
+                  <> show (length declarations)
+                  <> " provided."
+      _ -> throwError $ "Unsupported variable declaration type: " <> show kind
+      where
+        declaratorToELet :: String -> Maybe Node -> Expression
+        declaratorToELet name init = case init of
+          Just init' -> let result = (babylonToClean init')
+                        in ELet name <$> result <*> result
+          Nothing    -> throwError "`let` declarations must be initialized"
+
 babylonToClean :: Node -> Expression
 babylonToClean = case _ of
-  File                    f -> fileToExp f
   NumericLiteral          e -> literalToEPrim LNumber e
   BooleanLiteral          e -> literalToEPrim LBoolean e
   StringLiteral           e -> literalToEPrim LString e
@@ -59,11 +102,6 @@ propertyToString = case _ of
   EPrim (LString s) -> Just s
   EVar s            -> Just s
   _                 -> Nothing
-
-fileToExp :: Node' ( program :: Node ) -> Expression
-fileToExp { program } = case program of
-  Program { body } -> programBodyToELet body
-  _                -> throwError "Files must contain programs"
 
 unaryExpressionToEApp ::
   Node' ( operator :: UnaryOperator
@@ -154,32 +192,8 @@ bodyToELet decls ret = do
 
 type DeclaratorRecord = { id :: String, init :: Maybe Node }
 
-programBodyToELet :: Array Node -> Expression
-programBodyToELet declarations = case declarations of
-  [] -> throwError "Programs must contains declarations"
-  _  -> do
-    decls <- variableDeclarationsToDeclarators declarations
-    let d = case last decls of
-          Nothing -> throwError $ "Impossible state!"
-          Just { id } -> pure $ EVar id
-    foldr letDeclaratorReducer d decls
-
 variableDeclarationsToDeclarators :: Array Node -> Except String (Array DeclaratorRecord)
 variableDeclarationsToDeclarators ns = join <$> (traverse go ns) where
-  fromDeclarator = case _ of
-    VariableDeclarator { id: (Identifier { name: id })
-                       , init
-                       } -> pure { id, init }
-
-    _                    -> throwError
-                            "A `let` declaration must bind an expression to an identifier"
-
-  exportToDeclarators { declaration, specifiers } = case specifiers of
-    [] -> case declaration of
-      Nothing -> throwError "Named exports must include a `let` declaration"
-      Just d  -> go d
-    _  -> throwError "Export specifiers are not allowed"
-
   go = case _ of
     VariableDeclaration { kind
                         , declarations
@@ -197,6 +211,21 @@ variableDeclarationsToDeclarators ns = join <$> (traverse go ns) where
                        "Invalid statement "
                        <> show d
                        <> ". Only `let` and `return` statements are allowed."
+
+  fromDeclarator = case _ of
+    VariableDeclarator { id: (Identifier { name: id })
+                       , init
+                       } -> pure { id, init }
+
+    _                    -> throwError
+                            "A `let` declaration must bind an expression to an identifier"
+
+  exportToDeclarators { declaration, specifiers } = case specifiers of
+    [] -> case declaration of
+      Nothing -> throwError "Named exports must include a `let` declaration"
+      Just d  -> go d
+    _  -> throwError "Export specifiers are not allowed"
+
 
 letDeclaratorReducer :: DeclaratorRecord -> Expression -> Expression
 letDeclaratorReducer { id, init } acc = case init of
